@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environnements virtuels
+venv/
+env/
+.env
+
+# Distribution / Build
+build/
+dist/
+*.spec
+
+# Base de données (ne pas versionner la DB de prod !)
+*.db
+*.sqlite3
+Backups/
+.snapshots/
+
+# Logs
+*.log
+error_log.txt
+
+# IDE
+.vscode/
+.idea/
+
+# Fichiers système
+Thumbs.db
+Desktop.ini
