@@ -414,8 +414,9 @@ def export_clients_to_excel(clients: List[Dict[str, Any]], filename: str):
     center_align = Alignment(horizontal="center", vertical="center")
     
     # Headers
-    headers = ['ID', 'Raison Sociale', 'Adresse', 'RC', 'NIS', 'NIF', 
-               'Article Imposition', 'Seuil Crédit', 'Actif']
+    headers = ['Raison Sociale', 'Seuil Crédit', 'Solde Initial (N-1)', 
+               'Total Chèques', 'Total Versements', 'Total Virements', 
+               'Total Paiements Global', 'Total Factures PPC (Net)', 'Solde Actuel']
     ws.append(headers)
     
     # Style header row
@@ -427,15 +428,15 @@ def export_clients_to_excel(clients: List[Dict[str, Any]], filename: str):
     # Data rows
     for client in clients:
         ws.append([
-            client['id'],
             client['raison_sociale'],
-            client['adresse'],
-            client['rc'],
-            client['nis'],
-            client['nif'],
-            client['article_imposition'],
             client['seuil_credit'],
-            'Oui' if client['active'] else 'Non'
+            client['report_n_moins_1'],
+            client.get('paiements_cheque', 0.0),
+            client.get('paiements_versement', 0.0),
+            client.get('paiements_virement', 0.0),
+            client.get('paiements_global', 0.0),
+            client.get('factures_net_ttc', 0.0),
+            client.get('solde_actuel', 0.0)
         ])
     
     # Auto-adjust column widths
@@ -867,23 +868,40 @@ def generate_invoice_state_pdf(invoice_lines: List[Dict[str, Any]], date_range: 
     
     total_ht = 0.0
     
-    for line in invoice_lines:
+    # Track which rows are Avoirs to style them
+    avoir_rows = []
+    
+    for idx, line in enumerate(invoice_lines):
+        # Determine if Avoir or Cancelled.
+        is_avoir = (line.get('type_document') == 'Avoir')
+        is_cancelled = (line.get('statut') == 'Annulée')
+        has_avoir = line.get('has_avoir', 0) # SQLite return 0 or 1
+        
+        is_highlighted = is_avoir or is_cancelled or has_avoir
+        
         table_data.append([
             line['numero'],
             line['date_facture'],
             line['product_nom'],
-            f"{line['montant_ht']:.2f}"
+            f"{line['montant_ht']:,.2f}"
         ])
-        total_ht += line['montant_ht']
+        
+        # Only add to total if NOT cancelled
+        if not is_cancelled:
+            total_ht += line['montant_ht']
+        
+        if is_highlighted:
+            avoir_rows.append(idx + 1) # +1 for header
         
     # Total Row
-    table_data.append(['', '', 'TOTAL HT:', f"{total_ht:.2f}"])
+    table_data.append(['', '', 'TOTAL HT:', f"{total_ht:,.2f}"])
         
     # Create Table
     col_widths = [4*cm, 3*cm, 8*cm, 4*cm]
     t = Table(table_data, colWidths=col_widths, repeatRows=1)
     
-    t.setStyle(TableStyle([
+    # Base Style
+    base_style = [
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a237e')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
@@ -892,7 +910,7 @@ def generate_invoice_state_pdf(invoice_lines: List[Dict[str, Any]], date_range: 
         ('FONTSIZE', (0, 0), (-1, 0), 10),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
         ('GRID', (0, 0), (-1, -2), 0.5, colors.grey),
-        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica-Bold'), # Changed to Bold
         ('FONTSIZE', (0, 1), (-1, -1), 9),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         
@@ -900,7 +918,13 @@ def generate_invoice_state_pdf(invoice_lines: List[Dict[str, Any]], date_range: 
         ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
         ('LINEABOVE', (0, -1), (-1, -1), 1, colors.black),
         ('BACKGROUND', (0, -1), (-1, -1), colors.whitesmoke),
-    ]))
+    ]
+    
+    # Add Red Color for Avoirs
+    for row_idx in avoir_rows:
+        base_style.append(('TEXTCOLOR', (0, row_idx), (-1, row_idx), colors.darkred))
+    
+    t.setStyle(TableStyle(base_style))
     
     story.append(t)
     doc.build(story)

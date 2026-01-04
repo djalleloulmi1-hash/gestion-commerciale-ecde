@@ -101,6 +101,7 @@ class MainApplication:
                         background="#263238", 
                         foreground="white", 
                         fieldbackground="#263238",
+                        font=('Arial', 10, 'bold'),
                         rowheight=25)
         
         style.configure("Treeview.Heading",
@@ -421,12 +422,14 @@ class DashboardFrame(ttk.Frame):
         paiements = self.app.db.get_all_paiements()
         
         # Calculate totals
-        valid_factures = [f for f in factures if f['type_document'] == 'Facture' and f['statut'] != 'Annulée']
-        valid_avoirs = [f for f in factures if f['type_document'] == 'Avoir' and f['statut'] != 'Annulée']
+        # Use centralized logic for CA to ensure consistency with PDF reports
+        # Determine current year range
+        import datetime
+        current_year = datetime.datetime.now().year
+        start_date = f"{current_year}-01-01"
+        end_date = f"{current_year}-12-31"
         
-        total_sales = sum(f['montant_ttc'] for f in valid_factures)
-        total_returns = sum(f['montant_ttc'] for f in valid_avoirs)
-        total_factures = total_sales - total_returns
+        ca_total = self.app.logic.calculate_ca_net(start_date, end_date)
         
         total_paiements = sum(p['montant'] for p in paiements)
         
@@ -434,8 +437,8 @@ class DashboardFrame(ttk.Frame):
         metrics = [
             ("Clients Actifs", len(clients), "#4caf50"),
             ("Factures", len(factures), "#2196f3"),
-            ("CA Total", f"{total_factures:.2f} DA", "#ff9800"),
-            ("Paiements Total", f"{total_paiements:.2f} DA", "#9c27b0"),
+            ("CA Total", f"{ca_total:,.2f} DA", "#ff9800"),
+            ("Paiements Total", f"{total_paiements:,.2f} DA", "#9c27b0"),
         ]
         
         for i, (label, value, color) in enumerate(metrics):
@@ -759,7 +762,7 @@ class ClientsFrame(ttk.Frame):
         self.edit_client_btn()
     
     def export_excel(self):
-        clients = self.app.db.get_all_clients()
+        clients = self.app.logic.get_clients_export_data()
         filename = filedialog.asksaveasfilename(
             defaultextension=".xlsx",
             filetypes=[("Excel files", "*.xlsx")]
@@ -1203,13 +1206,17 @@ class InvoicesFrame(ttk.Frame):
         self.tree.bind("<Button-3>", self.show_context_menu)
 
         self.tree.tag_configure('evenrow', background='#546e7a')
+        self.tree.tag_configure('avoir_row', foreground='#ff5252') # Dark Red/Orange for dark theme visibility
         self.load_data()
     
     def load_data(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
         
+        # Sort by date descending (usually preferred)
         factures = self.app.db.get_all_factures()
+        # Sort manually if needed, but DB usually returns sorted or we trust insertion order
+        
         for idx, f in enumerate(factures):
             # Determine linked reference(s)
             linked_ref = ""
@@ -1218,7 +1225,13 @@ class InvoicesFrame(ttk.Frame):
             elif f.get('child_refs'):
                 linked_ref = f['child_refs']
             
-            tag = 'evenrow' if idx % 2 == 0 else ''
+            tags = []
+            if idx % 2 == 0:
+                tags.append('evenrow')
+            
+            # Highlight Avoirs AND Cancelled Invoices AND Invoices with Avoirs (Linked)
+            if f['type_document'] == 'Avoir' or f['statut'] == 'Annulée' or (f.get('child_refs') and f['child_refs'].strip()):
+                tags.append('avoir_row')
 
             self.tree.insert("", tk.END, iid=f['id'], values=(
                 f['numero'],
@@ -1231,7 +1244,7 @@ class InvoicesFrame(ttk.Frame):
                 f"{f['montant_tva']:.2f}",
                 f"{f['montant_ttc']:.2f}",
                 f.get('etat_paiement', 'N/A')
-            ), tags=(tag,))
+            ), tags=tuple(tags))
     
     def add_invoice(self, type_doc):
         # type_doc argument kept for compatibility but we mostly use for Facture now
@@ -1372,7 +1385,12 @@ class InvoicesFrame(ttk.Frame):
          avoirs_rows = c.fetchall()
          
          total_avoirs = sum(r['montant_ht'] for r in avoirs_rows)
-         ca_net = ca_brut - total_avoirs
+         
+         # Calculation Logic:
+         # CA Brut = Sum of Valid Invoices (Positive)
+         # Total Avoirs = Sum of Valid Avoirs (Negative in DB)
+         # CA Net = CA Brut + Total Avoirs (e.g., 100 + (-20) = 80)
+         ca_net = ca_brut + total_avoirs
          
          details_avoirs = []
          for r in avoirs_rows:
@@ -1380,15 +1398,15 @@ class InvoicesFrame(ttk.Frame):
                  'numero': r['numero'],
                  'facture_ref': r['ref'],
                  'date': r['date_facture'],
-                 'montant': r['montant_ht']
+                 'montant': abs(r['montant_ht']) # Send absolute value for display
              })
              
          data = {
              'start_date': start_date,
              'end_date': end_date,
              'ca_brut': ca_brut,
-             'total_avoirs': total_avoirs,
-             'ca_net': ca_net,
+             'total_avoirs': abs(total_avoirs), # Send absolute value for display (PDF adds negative sign)
+             'ca_net': ca_net, 
              'details_avoirs': details_avoirs
          }
          
@@ -1780,8 +1798,15 @@ class StockFrame(ttk.Frame):
             
             # Simplified Stats:
             # Init = Final - (In - Out) ==> Init = Final - In + Out
-            total_in = sum(m['quantite'] for m in movements if m['type_mouvement'] == 'entree')
-            total_out = sum(m['quantite'] for m in movements if m['type_mouvement'] == 'sortie')
+            # Net Sales = Ventes (negative) + Retours (positive)
+            # We want to display the OUTFLOW. So if we sold 100 (-100) and returned 20 (+20), Net = -80. Display 80.
+            sales_movements = [m['quantite'] for m in movements if m['type_mouvement'] in ['Vente', 'Retour Avoir']]
+            net_sales = sum(sales_movements)
+            total_out = abs(net_sales) # Sum of Vente+Avoir should be negative (net outflow), or 0 if balanced.
+            
+            # Receptions only
+            reception_movements = [m['quantite'] for m in movements if m['type_mouvement'] in ['Réception', 'Annulation Réception']]
+            total_in = sum(reception_movements)
             
             # Logic tweak: if parent stock management, stock_initial might be misleading if just calc from movements
             # But let's show visual calc:
@@ -2941,6 +2966,10 @@ class InvoiceDialog:
         
         tk.Button(btn_frame, text="Imprimer BL (Matricielle)", bg="#795548", fg="white", 
                  font=("Arial", 11, "bold"), command=self.print_matrix).pack(side=tk.RIGHT, padx=20)
+
+        if self.readonly and self.type_doc == 'Facture':
+             tk.Button(btn_frame, text="Ajouter Paiement", bg="#009688", fg="white",
+                      font=("Arial", 11, "bold"), command=self.open_payment_dialog).pack(side=tk.RIGHT, padx=20)
         
         cancel_text = "Fermer" if self.readonly else "Annuler"
         tk.Button(btn_frame, text=cancel_text, command=self.dialog.destroy).pack(side=tk.RIGHT, padx=20)
@@ -3011,6 +3040,7 @@ class InvoiceDialog:
         state_contract = "disabled" if self.readonly else "normal"
         self.contract_combo = ttk.Combobox(top_frame, textvariable=self.contract_var, width=30, state=state_contract)
         self.contract_combo.pack(side=tk.LEFT, padx=5)
+        self.contract_combo.pack(side=tk.LEFT, padx=5)
         self.contracts_map = {}
         
         if self.type_doc == 'Avoir':
@@ -3032,7 +3062,7 @@ class InvoiceDialog:
         else:
              # Dummy entry for compatibility if not Avoir (though it checks type_doc usually)
              self.motif_entry = None
-
+        
         # Extra Client Info (Auto-filled)
         top_frame_2 = tk.Frame(self.dialog, padx=20, pady=5)
         top_frame_2.pack(fill=tk.X)
@@ -3044,6 +3074,10 @@ class InvoiceDialog:
         tk.Label(top_frame_2, text="Banque").pack(side=tk.LEFT, padx=(20, 5))
         self.client_banque_entry = tk.Entry(top_frame_2, width=30, bg="#455a64", fg="white", insertbackground="white")
         self.client_banque_entry.pack(side=tk.LEFT, padx=5)
+
+
+
+
 
 
         # Transport Information
@@ -3214,6 +3248,21 @@ class InvoiceDialog:
             self.menu = tk.Menu(self.tree, tearoff=0)
             self.menu.add_command(label="Supprimer", command=self.remove_line)
             self.tree.bind("<Button-3>", self.show_context_menu)
+
+
+
+
+    def open_payment_dialog(self):
+        if not self.view_facture_id: return
+        
+        facture = self.app.db.get_facture_by_id(self.view_facture_id)
+        if facture:
+             # Pass client_id and facture_id to pre-fill
+             PaymentDialog(self.app.root, self.app, 
+                           client_id=facture['client_id'], 
+                           facture_id=facture['id'],
+                           callback=self.callback)
+        
 
 
 
@@ -4007,11 +4056,13 @@ class LigneDialog:
 
 
 class PaymentDialog:
-    def __init__(self, parent, app, callback=None):
+    def __init__(self, parent, app, client_id=None, facture_id=None, callback=None):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Nouveau Paiement")
         self.dialog.state('zoomed')
         self.app = app
+        self.client_id = client_id
+        self.facture_id = facture_id
         self.callback = callback
         self._build()
     
@@ -4021,7 +4072,14 @@ class PaymentDialog:
         self.client_var = tk.StringVar()
         self.client_combo = ttk.Combobox(self.dialog, textvariable=self.client_var, width=40)
         self.client_combo['values'] = [f"{c['id']} - {c['raison_sociale']}" for c in clients]
+        self.client_combo['values'] = [f"{c['id']} - {c['raison_sociale']}" for c in clients]
         self.client_combo.pack(pady=5)
+        
+        if self.client_id:
+            for c_str in self.client_combo['values']:
+                if c_str.startswith(f"{self.client_id} -"):
+                    self.client_combo.set(c_str)
+                    break
         
         tk.Label(self.dialog, text="Montant*").pack(pady=5)
         self.montant = tk.Entry(self.dialog, bg="#455a64", fg="white", insertbackground="white")
@@ -4083,7 +4141,9 @@ class PaymentDialog:
                 contrat_num=self.contrat_num.get() or None,
                 contrat_date_debut=self.date_debut.get_date().strftime("%Y-%m-%d") if DateEntry and isinstance(self.date_debut, DateEntry) else self.date_debut.get(),
                 contrat_date_fin=self.date_fin.get_date().strftime("%Y-%m-%d") if DateEntry and isinstance(self.date_fin, DateEntry) and self.date_fin.get() else self.date_fin.get(),
-                user_id=self.app.user['id']
+
+                user_id=self.app.user['id'],
+                facture_id=self.facture_id # Link to invoice if provided
             )
             messagebox.showinfo("Succès" if success else "Erreur", msg)
             if success and self.callback:
@@ -4106,7 +4166,7 @@ class BordereauDialog:
     def _build(self):
         tk.Label(self.dialog, text="Sélectionner paiements 'En attente'").pack(pady=10)
         
-        self.tree = ttk.Treeview(self.dialog, columns=("Num", "Client", "Montant"), show="tree headings")
+        self.tree = ttk.Treeview(self.dialog, columns=("Num", "Client", "Montant", "Banque"), show="tree headings")
         for col in ("Num", "Client", "Montant", "Banque"):
             self.tree.heading(col, text=col)
         self.tree.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)

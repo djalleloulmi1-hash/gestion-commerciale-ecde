@@ -25,37 +25,20 @@ class BusinessLogic:
     def calculate_ca_net(self, start_date: str, end_date: str) -> float:
         """
         Calculate CA Net logic:
-        1. Identify all invoices in period
-        2. Find all credit notes linked to these invoices (any date)
-        3. Result = Sum(Invoices HT) - Sum(Linked Avoirs HT)
+        Result = Sum(All Transaction Amounts HT)
+        Since Avoirs are stored as negative values, simple SUM works.
         """
         conn = self.db._get_connection()
         cursor = conn.cursor()
         
-        # 1. Sum of Invoices in period
         cursor.execute("""
             SELECT COALESCE(SUM(montant_ht), 0)
             FROM factures
-            WHERE type_document = 'Facture'
-            AND date_facture BETWEEN ? AND ?
+            WHERE date_facture BETWEEN ? AND ?
             AND statut != 'Annulée'
         """, (start_date, end_date))
-        total_factures_ht = cursor.fetchone()[0]
         
-        # 2. Sum of Avoirs linked to invoices from this period
-        # CA Calculation: Sum(Invoices in period) - Sum(All Avoirs linked to these invoices)
-        cursor.execute("""
-            SELECT COALESCE(SUM(a.montant_ht), 0)
-            FROM factures a
-            JOIN factures f ON a.facture_origine_id = f.id
-            WHERE a.type_document = 'Avoir'
-            AND f.type_document = 'Facture'
-            AND f.date_facture BETWEEN ? AND ?
-            AND a.statut != 'Annulée'
-        """, (start_date, end_date))
-        total_avoirs_linked_ht = cursor.fetchone()[0]
-        
-        return total_factures_ht - total_avoirs_linked_ht
+        return cursor.fetchone()[0]
     
     # ==================== STOCK MANAGEMENT ====================
     
@@ -593,7 +576,7 @@ class BusinessLogic:
                      self.db.log_stock_movement(
                         product_id=ligne['product_id'],
                         type_mouvement='Retour Avoir',
-                        quantite=ligne['quantite'],
+                        quantite=-ligne['quantite'], # Avoir qty is negative, so negate to make positive (Stock Add)
                         reference_document=numero,
                         document_id=facture_id,
                         created_by=user_id
@@ -634,8 +617,10 @@ class BusinessLogic:
                  facture_org = self.db.get_facture_by_id(facture_origine_id)
                  if facture_org:
                      new_status = 'Partiellement remboursée'
-                     if total_avoirs >= (facture_org['montant_ttc'] - 0.01):
-                         new_status = 'Remboursée / Avoir Total'
+                     # Avoirs are negative, so we use abs() to compare magnitude
+                     if abs(total_avoirs) >= (facture_org['montant_ttc'] - 0.01):
+                         new_status = 'Remboursée' # Or 'Annulée' if preferred, but usually Remboursée implies money returned
+                     
                      c.execute("UPDATE factures SET statut = ? WHERE id = ?", (new_status, facture_origine_id))
                      
                      # Decrease debt
@@ -818,6 +803,7 @@ class BusinessLogic:
         1. Detailed invoices/avoirs for the specific date.
         2. Per-product daily quantity (on report_date).
         3. Per-product cumulative quantity (Jan 1st to report_date).
+        FILTERS OUT: Fully refunded invoices and their cancelling Avoirs to show only "Real Sales".
         """
         conn = self.db._get_connection()
         cursor = conn.cursor()
@@ -826,13 +812,12 @@ class BusinessLogic:
         start_of_year = f"{year}-01-01"
         
         # 1. Fetch detailed invoices for the day
-        # Join with client and product info via line items
-        # Note: We need line-level detail for the report
         cursor.execute("""
             SELECT l.quantite, l.montant as montant_ht, 
-                   f.numero, f.date_facture, f.type_document,
+                   f.id as facture_id, f.numero, f.date_facture, f.type_document, f.statut,
+                   f.montant_ttc, f.facture_origine_id,
                    c.code_client, c.raison_sociale,
-                   p.nom as product_nom, p.code_produit, p.tva
+                   p.nom as product_nom, p.code_produit, p.tva, l.product_id
             FROM lignes_facture l
             JOIN factures f ON l.facture_id = f.id
             JOIN clients c ON f.client_id = c.id
@@ -841,37 +826,83 @@ class BusinessLogic:
             ORDER BY f.numero
         """, (report_date,))
         
-        details = []
-        rows = cursor.fetchall()
+        raw_rows = [dict(row) for row in cursor.fetchall()]
         
-        # Calculate row-level TTC for display
+        # --- LOGIC TO FILTER REFUNDED TRANSACTIONS ---
+        # We need to identify invoices that are fully Refunded/Cancelled
+        # and hide BOTH the Invoice and the Avoir.
+        
+        # 1. Identify IDs of invoices that are effectively cancelled
+        # Checks: Status is 'Remboursée...' OR 'Partiellement...' with 0 remaining
+        
+        hidden_invoice_ids = set()
+        
+        # Helper to check if invoice is fully refunded
+        def is_fully_refunded(facture_id, total_ttc):
+            # Sum Avoirs for this invoice
+            cursor.execute("""
+                SELECT COALESCE(SUM(montant_ttc), 0)
+                FROM factures
+                WHERE facture_origine_id = ? AND type_document = 'Avoir' AND statut != 'Annulée'
+            """, (facture_id,))
+            total_av = cursor.fetchone()[0]
+            # CHECK ABSOLUTE VALUE
+            # Avoirs are negative, invoices positive. 
+            # If abs(total_av) >= invoice_ttc, it's fully refunded.
+            return abs(total_av) >= (total_ttc - 0.5)
+
+        # First pass: Check Invoices
+        for r in raw_rows:
+            if r['type_document'] == 'Facture':
+                # Check status. Also check if we just missed the status update but sums match
+                if 'Remboursée' in r['statut'] or r['statut'] == 'Partiellement remboursée':
+                    if is_fully_refunded(r['facture_id'], r['montant_ttc']):
+                        hidden_invoice_ids.add(r['facture_id'])
+
+        # Second pass: Check Avoirs
+        # If Avoir points to a hidden invoice, hide it too
+        for r in raw_rows:
+            if r['type_document'] == 'Avoir' and r['facture_origine_id'] in hidden_invoice_ids:
+                hidden_invoice_ids.add(r['facture_id']) # Hide the Avoir itself
+
+        # Filter rows
+        details = []
+        
         total_day_ht = 0.0
         total_day_tva = 0.0
         total_day_ttc = 0.0
         total_day_qty = 0.0
         
-        for r in rows:
+        # Track product quantities for the "Product Stats" section (Daily only)
+        # We need to recalculate daily product stats based on the filtered list
+        filtered_daily_product_qty = {} 
+
+        for r in raw_rows:
+            if r['facture_id'] in hidden_invoice_ids:
+                continue
+            
             qty = r['quantite']
             ht = r['montant_ht']
             tva_rate = r['tva']
             tva_amount = ht * (tva_rate / 100)
             ttc = ht + tva_amount
             
-            # For Avoirs, amounts are effective deductions but displayed positively in list?
-            # Or if it's a sales report, usually Avoirs are negative.
-            # Let's keep them positive but mark type. 
-            # If the user wants "Ventes", maybe we only show Factures?
-            # User said "Etat de vente", usually includes Sales (Factures). 
-            # If Avoirs are significant, we might subtract. 
-            # For now, we list everything. 
-            # If type is Avoir, logically it should decrease the daily total.
+            # Determine sign based on document type
+            # Use strict type check
+            is_avoir = (r['type_document'] == 'Avoir')
+            sign = -1 if is_avoir else 1
             
-            sign = -1 if r['type_document'] == 'Avoir' else 1
-            
+            # Add to totals (using sign)
             total_day_ht += (ht * sign)
             total_day_tva += (tva_amount * sign)
             total_day_ttc += (ttc * sign)
             total_day_qty += (qty * sign)
+            
+            # Add to product stats
+            pid = r['product_id']
+            if pid not in filtered_daily_product_qty:
+                filtered_daily_product_qty[pid] = 0.0
+            filtered_daily_product_qty[pid] += (qty * sign)
             
             details.append({
                 'code_client': r['code_client'],
@@ -880,70 +911,41 @@ class BusinessLogic:
                 'produit': r['product_nom'],
                 'facture_num': r['numero'],
                 'date': r['date_facture'],
-                'qte': qty * sign,
+                'qte': qty * sign,         # Display negative for Avoirs if shown
                 'ht': ht * sign,
                 'tva': tva_amount * sign,
                 'ttc': ttc * sign
             })
             
         # 2. Product Summary (Daily & Cumulative)
+        # For Daily: Use our filtered calculation
+        # For Cumulative: We accept that historical data might include some refunds, 
+        # but technically we should apply same logic. 
+        # optimizing: For cumulative, we just run standard query but exclude 'Annulée'.
+        # Recalculating fully refunded for the whole year is expensive. 
+        # We stick to standard query for cumulative, but use filtered for daily.
+        
         products = self.db.get_all_products()
         product_stats = []
-        
-        total_cumul_ht = 0.0 # Just for info if needed, though report mostly asks for Qty
         
         for p in products:
             pid = p['id']
             
-            # Daily Qty
-            cursor.execute("""
-                SELECT COALESCE(SUM(l.quantite), 0)
-                FROM lignes_facture l
-                JOIN factures f ON l.facture_id = f.id
-                WHERE l.product_id = ? 
-                AND f.date_facture = ? 
-                AND f.type_document = 'Facture'
-                AND f.statut != 'Annulée'
-            """, (pid, report_date))
-            daily_sales = cursor.fetchone()[0]
+            # Daily Qty from filtered list
+            net_daily_qty = filtered_daily_product_qty.get(pid, 0.0)
             
-            cursor.execute("""
-                SELECT COALESCE(SUM(l.quantite), 0)
-                FROM lignes_facture l
-                JOIN factures f ON l.facture_id = f.id
-                WHERE l.product_id = ? 
-                AND f.date_facture = ? 
-                AND f.type_document = 'Avoir'
-                AND f.statut != 'Annulée'
-            """, (pid, report_date))
-            daily_returns = cursor.fetchone()[0]
-            
-            net_daily_qty = daily_sales - daily_returns
             
             # Cumulative Qty (Start of Year to Report Date Included)
+            # Since Avoirs are negative in DB, we just SUM everything
             cursor.execute("""
                 SELECT COALESCE(SUM(l.quantite), 0)
                 FROM lignes_facture l
                 JOIN factures f ON l.facture_id = f.id
                 WHERE l.product_id = ? 
                 AND f.date_facture BETWEEN ? AND ?
-                AND f.type_document = 'Facture'
                 AND f.statut != 'Annulée'
             """, (pid, start_of_year, report_date))
-            cumul_sales = cursor.fetchone()[0]
-            
-            cursor.execute("""
-                SELECT COALESCE(SUM(l.quantite), 0)
-                FROM lignes_facture l
-                JOIN factures f ON l.facture_id = f.id
-                WHERE l.product_id = ? 
-                AND f.date_facture BETWEEN ? AND ?
-                AND f.type_document = 'Avoir'
-                AND f.statut != 'Annulée'
-            """, (pid, start_of_year, report_date))
-            cumul_returns = cursor.fetchone()[0]
-            
-            net_cumul_qty = cumul_sales - cumul_returns
+            net_cumul_qty = cursor.fetchone()[0]
             
             product_stats.append({
                 'nom': p['nom'],
@@ -951,23 +953,14 @@ class BusinessLogic:
                 'cumul_qty': net_cumul_qty
             })
             
-        # Calculate Yearly Global Turnover (for footer)
-        # Assuming Global HT turnover
+        # Calculate Yearly Global Turnover (Net)
+        # Just SUM all amounts (Avoirs are negative)
         cursor.execute("""
             SELECT COALESCE(SUM(montant_ht), 0) FROM factures 
             WHERE date_facture BETWEEN ? AND ? 
-            AND type_document = 'Facture' AND statut != 'Annulée'
+            AND statut != 'Annulée'
         """, (start_of_year, report_date))
-        year_sales_ht = cursor.fetchone()[0]
-        
-        cursor.execute("""
-            SELECT COALESCE(SUM(montant_ht), 0) FROM factures 
-            WHERE date_facture BETWEEN ? AND ? 
-            AND type_document = 'Avoir' AND statut != 'Annulée'
-        """, (start_of_year, report_date))
-        year_returns_ht = cursor.fetchone()[0]
-        
-        year_net_ht = year_sales_ht - year_returns_ht
+        year_net_ht = cursor.fetchone()[0]
 
         return {
             'date': report_date,
@@ -1092,6 +1085,113 @@ class BusinessLogic:
             })
             
         return result
+
+    def get_clients_export_data(self) -> List[Dict[str, Any]]:
+        """
+        Get detailed client data for Excel export.
+        Includes:
+        - Raison Sociale, Seuil Credit, Solde N-1
+        - Payment breakdown by mode (Chèque, Versement, Virement)
+        - Net Sales (Factures TTC - |Avoirs TTC|)
+        - Current Solde
+        """
+        conn = self.db._get_connection()
+        c = conn.cursor()
+        
+        # Get all active clients
+        clients = self.db.get_all_clients(active_only=True)
+        export_data = []
+        
+        current_year = datetime.now().year # Or use logic similar to calculate_client_balance
+        
+        for client in clients:
+            client_id = client['id']
+            # Basic Info
+            data = {
+                'raison_sociale': client['raison_sociale'],
+                'seuil_credit': client['seuil_credit'],
+                'report_n_moins_1': client['report_n_moins_1']
+            }
+            
+            # Payment Breakdown
+            # We want all payments, no date filter mentioned, likely "Current State"
+            # But normally logic.calculate_client_balance filters by closure year.
+            # Here we follow the global balance logic for consistency.
+            
+            # 1. Get total payments breakdown
+            payments_breakdown = {'Chèque': 0.0, 'Versement': 0.0, 'Virement': 0.0, 'Global': 0.0}
+            
+            c.execute("""
+                SELECT mode_paiement, SUM(montant)
+                FROM paiements 
+                WHERE client_id = ?
+                GROUP BY mode_paiement
+            """, (client_id,))
+            
+            rows = c.fetchall()
+            for r in rows:
+                mode, montant = r[0], r[1]
+                if mode in payments_breakdown:
+                    payments_breakdown[mode] = montant
+                else:
+                    # Map other modes if any (Espèces, etc) or ignore? 
+                    # User asked for specific columns but "Total Paiements Global" should include everything?
+                    # "total des paiements (cheque) total des paiements (versements) + total des paiement (virements) + (total des paiements cheque+versements+cheques)"
+                    # Typically "Global" implies sum of ALL.
+                    pass
+                payments_breakdown['Global'] += montant
+
+            data.update({
+                'paiements_cheque': payments_breakdown['Chèque'],
+                'paiements_versement': payments_breakdown['Versement'],
+                'paiements_virement': payments_breakdown['Virement'],
+                'paiements_global': payments_breakdown['Global']
+            })
+            
+            # Factures & Avoirs
+            # Net Sales = Sum(Factures TTC) - Sum(Abs(Avoirs TTC))
+            c.execute("""
+                SELECT type_document, SUM(montant_ttc)
+                FROM factures
+                WHERE client_id = ? AND statut != 'Annulée'
+                GROUP BY type_document
+            """, (client_id,))
+            
+            rows = c.fetchall()
+            total_factures = 0.0
+            total_avoirs = 0.0
+            
+            for r in rows:
+                doc_type, amount = r[0], r[1]
+                if doc_type == 'Facture':
+                    total_factures = amount
+                elif doc_type == 'Avoir':
+                    # Amount is stored as negative or positive? 
+                    # create_facture inserts positive amounts? 
+                    # Let's check schema/insertion. 
+                    # logic.py Line 706 calculates totals. 
+                    # ui.py usually passes positive quantites for Avoir but logic converts stock.
+                    # Standard logic: Invoice Amount is Positive. Avoir Amount is Positive (magnitude).
+                    # Avoirs usually have type_document='Avoir'.
+                    total_avoirs = abs(amount) 
+
+            # User Request: "Total Factures TTC (les factures et leurs avoirs doivent etre considerés comme 0)"
+            # Meaning Net Sales.
+            # Assuming Avoirs cancel Factures.
+            
+            net_sales = total_factures - total_avoirs
+            data['factures_net_ttc'] = net_sales
+            
+            # Solde Actuel
+            # Standard Formula: (Report + Paiements + Avoirs_Credit_Value) - Factures
+            # Or simplified: (Report + Paiements) - Net_Sales (mathematically equivalent if Avoirs used correctly)
+            # Let's use the robust function
+            balance_info = self.calculate_client_balance(client_id)
+            data['solde_actuel'] = balance_info['solde']
+            
+            export_data.append(data)
+            
+        return export_data
 
 # Global business logic instance
 _logic_instance: Optional[BusinessLogic] = None

@@ -666,6 +666,7 @@ class DatabaseManager:
                       date_paiement: str = None, statut_facture: str = 'Non soldée',
                       contract_id: int = None,
                       chauffeur: str = None, matricule_tracteur: str = None, matricule_remorque: str = None,
+                      type_vente: str = None, mode_paiement: str = None,
                       created_by: int = None) -> int:
         """Create new invoice or credit note"""
         conn = self._get_connection()
@@ -794,12 +795,14 @@ class DatabaseManager:
                 f.date_facture,
                 p.nom as product_nom,
                 l.quantite,
-                l.montant as montant_ht
+                l.montant as montant_ht,
+                f.statut,
+                f.type_document,
+                (SELECT COUNT(*) FROM factures WHERE facture_origine_id = f.id AND type_document = 'Avoir' AND statut != 'Annulée') > 0 as has_avoir
             FROM lignes_facture l
             JOIN factures f ON l.facture_id = f.id
             JOIN products p ON l.product_id = p.id
             WHERE f.date_facture BETWEEN ? AND ?
-              AND f.type_document = 'Facture'
             ORDER BY f.date_facture DESC, f.numero DESC
         """, (start_date, end_date))
         
@@ -821,7 +824,7 @@ class DatabaseManager:
             FROM factures f
             JOIN clients c ON f.client_id = c.id
             WHERE f.date_facture BETWEEN ? AND ?
-              AND f.type_document = 'Facture'
+              AND f.statut != 'Annulée'
             GROUP BY c.id
             ORDER BY c.raison_sociale
         """, (start_date, end_date))
