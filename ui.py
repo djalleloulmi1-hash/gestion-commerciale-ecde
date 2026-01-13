@@ -12,24 +12,15 @@ import traceback
 from database import get_db
 from logic import get_logic
 # Try to import format_quantity, if not available yet (circular import risk?), handle gracefully
-try:
-    from utils import (generate_invoice_pdf, generate_reception_pdf, generate_bordereau_pdf,
-                       export_clients_to_excel, export_factures_to_excel, export_stock_to_excel,
-                       nombre_en_lettres, generate_client_state_pdf, generate_invoice_state_pdf,
-                       generate_etat_104_pdf, generate_payments_state_pdf, generate_daily_sales_pdf,
-                       generate_sales_by_category_pdf, format_quantity, check_logo_exists,
-                       preview_and_print_pdf, generate_creances_pdf)
-except ImportError:
-    # Fallback if utils not fully loaded or circular dependency
-    def format_quantity(v, u): return f"{v:.3f}" if str(u).lower() == 'tonne' else f"{v:.2f}"
-    from utils import (generate_invoice_pdf, generate_reception_pdf, generate_bordereau_pdf,
-                       export_clients_to_excel, export_factures_to_excel, export_stock_to_excel,
-                       nombre_en_lettres, generate_client_state_pdf, generate_invoice_state_pdf,
-                       generate_etat_104_pdf, generate_payments_state_pdf, generate_daily_sales_pdf,
-                       generate_sales_by_category_pdf, check_logo_exists,
-                       preview_and_print_pdf, generate_creances_pdf)
+from utils import (generate_invoice_pdf, generate_reception_pdf, generate_bordereau_pdf,
+                   export_clients_to_excel, export_factures_to_excel, export_stock_to_excel,
+                   nombre_en_lettres, generate_client_state_pdf, generate_invoice_state_pdf,
+                   generate_etat_104_pdf, generate_payments_state_pdf, generate_daily_sales_pdf,
+                   generate_sales_by_category_pdf, format_quantity, check_logo_exists,
+                   preview_and_print_pdf, generate_creances_pdf, format_currency, parse_currency)
 from PIL import Image, ImageTk
 import os
+from reports import generate_stock_valuation_excel, generate_stock_valuation_pdf
 try:
     from tkcalendar import DateEntry
 except ImportError:
@@ -163,19 +154,29 @@ class MainApplication:
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
         
-        # Configuration menu
-        config_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Configuration", menu=config_menu)
-        config_menu.add_command(label="Utilisateurs", command=self.show_users)
-        # config_menu.add_command(label="Prix", command=self.show_prices)
-        config_menu.add_separator()
-        config_menu.add_command(label="Clôture Annuelle", command=self.show_closure)
-        config_menu.add_separator()
-        config_menu.add_command(label="Remise à zéro", command=self.reset_application_data)
-        config_menu.add_separator()
-        config_menu.add_command(label="Quitter", command=self.quit_app)
-        config_menu.add_separator()
-        config_menu.add_command(label="A Propos", command=self.show_about)
+        
+        # Configuration menu - Only for Admins
+        if self.user.get('role') == 'admin':
+            config_menu = tk.Menu(menubar, tearoff=0)
+            menubar.add_cascade(label="Configuration", menu=config_menu)
+            config_menu.add_command(label="Utilisateurs", command=self.show_users)
+            config_menu.add_separator()
+            config_menu.add_command(label="Export Miroir (Directeur)", command=self.export_miroir)
+            config_menu.add_separator()
+            config_menu.add_command(label="Clôture Annuelle", command=self.show_closure)
+            config_menu.add_separator()
+            config_menu.add_command(label="Remise à zéro", command=self.reset_application_data)
+            config_menu.add_separator()
+        else:
+            # For non-admins, maybe just "A Propos" or minimal options
+            pass
+            
+        # File/System menu for everyone
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Système", menu=file_menu)
+        file_menu.add_command(label="Déconnexion", command=self.logout)
+        file_menu.add_command(label="Quitter", command=self.quit_app)
+        file_menu.add_command(label="A Propos", command=self.show_about)
         
         # Main container
         main_container = tk.Frame(self.root, bg=BG_COLOR)
@@ -388,6 +389,16 @@ class MainApplication:
         if messagebox.askyesno("Quitter", "Voulez-vous quitter l'application ?"):
             create_backup()
             self.root.quit()
+
+    def export_miroir(self):
+        """Export read-only mirror of database"""
+        target_dir = filedialog.askdirectory(title="Sélectionner le dossier pour l'export Miroir")
+        if target_dir:
+            success, msg = self.db.export_miroir(target_dir)
+            if success:
+                messagebox.showinfo("Succès", f"Export Miroir réussi :\n{msg}")
+            else:
+                messagebox.showerror("Erreur", f"Échec de l'export :\n{msg}")
 
 
 # ==================== DASHBOARD FRAME ====================
@@ -670,8 +681,9 @@ class ClientsFrame(ttk.Frame):
         tk.Button(action_frame, text="Modifier", bg=SECONDARY_COLOR, fg="white", 
                  font=("Arial", 10, "bold"), command=self.edit_client_btn, width=15).pack(side=tk.LEFT, padx=5)
                  
-        tk.Button(action_frame, text="Supprimer", bg="#d32f2f", fg="white", 
-                 font=("Arial", 10, "bold"), command=self.delete_client_btn, width=15).pack(side=tk.LEFT, padx=5)
+        if self.app.user.get('role') == 'admin':
+            tk.Button(action_frame, text="Supprimer", bg="#d32f2f", fg="white", 
+                     font=("Arial", 10, "bold"), command=self.delete_client_btn, width=15).pack(side=tk.LEFT, padx=5)
 
         tk.Button(action_frame, text="Contrats", bg="#0097a7", fg="white", 
                  font=("Arial", 10, "bold"), command=self.manage_contracts, width=15).pack(side=tk.LEFT, padx=5)
@@ -679,7 +691,8 @@ class ClientsFrame(ttk.Frame):
         # Context menu
         self.menu = tk.Menu(self.tree, tearoff=0)
         self.menu.add_command(label="Modifier", command=self.edit_client_btn)
-        self.menu.add_command(label="Supprimer", command=self.delete_client_btn)
+        if self.app.user.get('role') == 'admin':
+            self.menu.add_command(label="Supprimer", command=self.delete_client_btn)
         self.tree.bind("<Button-3>", self.show_context_menu)
         
         # Load data
@@ -707,8 +720,8 @@ class ClientsFrame(ttk.Frame):
                 client['rc'],
                 client['nis'],
                 client['nif'],
-                f"{client['seuil_credit']:.2f}",
-                f"{balance['solde']:.2f}"
+                format_currency(client['seuil_credit']),
+                format_currency(balance['solde'])
             ), tags=(tag,))
     
     
@@ -834,8 +847,9 @@ class ProductsFrame(ttk.Frame):
         tk.Button(action_frame, text="Modifier", bg=SECONDARY_COLOR, fg="white", 
                  font=("Arial", 10, "bold"), command=self.edit_product_btn, width=15).pack(side=tk.LEFT, padx=5)
                  
-        tk.Button(action_frame, text="Supprimer", bg="#d32f2f", fg="white", 
-                 font=("Arial", 10, "bold"), command=self.delete_product_btn, width=15).pack(side=tk.LEFT, padx=5)
+        if self.app.user.get('role') == 'admin':
+            tk.Button(action_frame, text="Supprimer", bg="#d32f2f", fg="white", 
+                     font=("Arial", 10, "bold"), command=self.delete_product_btn, width=15).pack(side=tk.LEFT, padx=5)
         
         self.load_data()
         
@@ -845,7 +859,8 @@ class ProductsFrame(ttk.Frame):
         # Context menu
         self.menu = tk.Menu(self.tree, tearoff=0)
         self.menu.add_command(label="Modifier", command=self.edit_product_btn)
-        self.menu.add_command(label="Supprimer", command=self.delete_product_btn)
+        if self.app.user.get('role') == 'admin':
+            self.menu.add_command(label="Supprimer", command=self.delete_product_btn)
         self.tree.bind("<Button-3>", self.show_context_menu)
 
         self.tree.tag_configure('evenrow', background='#546e7a')
@@ -872,9 +887,9 @@ class ProductsFrame(ttk.Frame):
                 p.get('code_produit', ''),
                 p['nom'],
                 p['unite'],
-                f"{p['prix_actuel']:.2f}",
-                f"{p['stock_actuel']:.2f}",
-                f"{p.get('cout_revient', 0.0):.2f}",
+                format_currency(p['prix_actuel']),
+                format_quantity(p['stock_actuel'], p['unite']),
+                format_currency(p.get('cout_revient', 0.0)),
                 f"{p.get('tva', 19.0):.2f}%",
                 ref_stock
             ), tags=(tag,))
@@ -954,15 +969,16 @@ class ReceptionsFrame(ttk.Frame):
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
 
-        tk.Button(
-            btn_box, 
-            text="Supprimer", 
-            bg="#d32f2f", 
-            fg="white",
-            font=("Arial", 10, "bold"),
-            command=self.delete_reception,
-            cursor="hand2"
-        ).pack(side=tk.LEFT, padx=5)
+        if self.app.user.get('role') == 'admin':
+            tk.Button(
+                btn_box, 
+                text="Supprimer", 
+                bg="#d32f2f", 
+                fg="white",
+                font=("Arial", 10, "bold"),
+                command=self.delete_reception,
+                cursor="hand2"
+            ).pack(side=tk.LEFT, padx=5)
 
         tk.Button(
             btn_box, 
@@ -1143,9 +1159,19 @@ class InvoicesFrame(ttk.Frame):
         
         tk.Button(
             btn_frame, 
+            text="Modifier", 
+            bg="#f9a825", # Orange/Yellow to indicate edit
+            fg="black",
+            font=("Arial", 10, "bold"),
+            command=self.edit_selected,
+            cursor="hand2"
+        ).pack(side=tk.LEFT, padx=5)
+
+        tk.Button(
+            btn_frame, 
             text="Imprimer", 
             bg="#555", 
-            fg="white",
+            fg="white", 
             font=("Arial", 10),
             command=self.print_selected,
             cursor="hand2"
@@ -1201,8 +1227,7 @@ class InvoicesFrame(ttk.Frame):
         
         # Right-click menu
         self.menu = tk.Menu(self.tree, tearoff=0)
-        self.menu.add_command(label="Générer PDF", command=self.generate_pdf)
-        self.menu.add_command(label="Voir Détails", command=self.show_details)
+        # Menu items will be populated dynamically in show_context_menu
         self.tree.bind("<Button-3>", self.show_context_menu)
 
         self.tree.tag_configure('evenrow', background='#546e7a')
@@ -1240,9 +1265,9 @@ class InvoicesFrame(ttk.Frame):
                 f['date_facture'],
                 f['client_nom'],
 
-                f"{f['montant_ht']:.2f}",
-                f"{f['montant_tva']:.2f}",
-                f"{f['montant_ttc']:.2f}",
+                format_currency(f['montant_ht']),
+                format_currency(f['montant_tva']),
+                format_currency(f['montant_ttc']),
                 f.get('etat_paiement', 'N/A')
             ), tags=tuple(tags))
     
@@ -1258,6 +1283,9 @@ class InvoicesFrame(ttk.Frame):
 
         origin_id = int(selection[0])
         InvoiceDialog(self.app.root, self.app, 'Avoir', callback=self.load_data, facture_origine_id=origin_id)
+
+    def edit_selected(self):
+        self.show_details() # Re-use show_details which has the edit logic built-in
 
     def print_selected(self):
         selection = self.tree.selection()
@@ -1275,6 +1303,21 @@ class InvoicesFrame(ttk.Frame):
     def show_context_menu(self, event):
         selection = self.tree.selection()
         if selection:
+            # Rebuild menu dynamically
+            self.menu.delete(0, tk.END)
+            
+            facture_id = int(selection[0])
+            facture_data = self.app.db.get_facture_by_id(facture_id)
+            
+            if facture_data:
+                if facture_data.get('statut_facture') == 'Brouillon':
+                     self.menu.add_command(label="Modifier Facture", command=self.edit_selected)
+                
+                self.menu.add_command(label="Voir Détails", command=self.show_details)
+                
+                if facture_data.get('statut_facture') != 'Brouillon':
+                    self.menu.add_command(label="Générer PDF", command=self.generate_pdf)
+            
             self.menu.post(event.x_root, event.y_root)
     
     def generate_pdf(self):
@@ -1299,7 +1342,12 @@ class InvoicesFrame(ttk.Frame):
         facture_data = self.app.db.get_facture_by_id(facture_id)
         
         if facture_data:
-            InvoiceDialog(self.app.root, self.app, facture_data.get('type_document', 'Facture'), readonly=True, facture_id=facture_id)
+            # Check draft status to enable editing
+            is_readonly = True
+            if facture_data.get('statut_facture') == 'Brouillon':
+                 is_readonly = False
+            
+            InvoiceDialog(self.app.root, self.app, facture_data.get('type_document', 'Facture'), readonly=is_readonly, facture_id=facture_id)
     
     def export_excel(self):
         factures = self.app.db.get_all_factures()
@@ -1502,7 +1550,7 @@ class PaymentsFrame(ttk.Frame):
                 p['numero'],
                 p['date_paiement'],
                 p['client_nom'],
-                f"{p['montant']:.2f}",
+                format_currency(p['montant']),
                 p['mode_paiement'],
                 p.get('reference', '-'),
                 p['statut']
@@ -1545,6 +1593,19 @@ class SituationFrame(ttk.Frame):
                       value="daily_sales", command=self.update_ui, bg=BG_COLOR, fg=TEXT_COLOR, selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
         tk.Radiobutton(mode_frame, text="État CA par Famille", variable=self.mode, 
                       value="ca_category", command=self.update_ui, bg=BG_COLOR, fg=TEXT_COLOR, selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
+        tk.Radiobutton(mode_frame, text="Rapport Stock Valorisé", variable=self.mode, 
+                      value="stock_valuation", command=self.update_ui, bg=BG_COLOR, fg=TEXT_COLOR, selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
+
+        # Second Row of Modes
+        mode_frame_2 = tk.Frame(self, bg=BG_COLOR)
+        mode_frame_2.pack(fill=tk.X, padx=40, pady=5)
+
+        tk.Radiobutton(mode_frame_2, text="État de Consommation Global", variable=self.mode, 
+                      value="global_consumption", command=self.update_ui, bg=BG_COLOR, fg=TEXT_COLOR, selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
+        tk.Radiobutton(mode_frame_2, text="Mouvements Valorisés", variable=self.mode, 
+                      value="valorized_movements", command=self.update_ui, bg=BG_COLOR, fg=TEXT_COLOR, selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
+        tk.Radiobutton(mode_frame_2, text="État Annuel des Créances", variable=self.mode, 
+                      value="annual_receivables", command=self.update_ui, bg=BG_COLOR, fg=TEXT_COLOR, selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
         
         # Controls Frame (Dynamic)
         self.controls_frame = tk.Frame(self, bg=BG_COLOR)
@@ -1598,6 +1659,25 @@ class SituationFrame(ttk.Frame):
                 self.info_text.delete(1.0, tk.END)
                 self.info_text.insert(tk.END, "Sélectionnez une date et cliquez sur 'Générer Rapport PDF' pour voir l'état journalier des ventes.")
 
+        elif mode == "global_consumption":
+            tk.Label(self.controls_frame, text="Date de Situation (J):", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            
+            if DateEntry:
+                self.date_entry = DateEntry(self.controls_frame, width=12, background='darkblue',
+                                            foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
+                self.date_entry.pack(side=tk.LEFT, padx=5)
+            else:
+                self.date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+                self.date_entry = tk.Entry(self.controls_frame, textvariable=self.date_var, width=15, bg="#455a64", fg="white", insertbackground="white")
+                self.date_entry.pack(side=tk.LEFT, padx=5)
+            
+            tk.Button(self.controls_frame, text="Générer Rapport (PDF & Excel)", bg=ACCENT_COLOR, fg="white", 
+                     command=self.export_pdf).pack(side=tk.RIGHT, padx=5)
+            
+            if hasattr(self, 'info_text'):
+                self.info_text.delete(1.0, tk.END)
+                self.info_text.insert(tk.END, "Génère l'état de consommation (Global) pour la date sélectionnée.\nInclus : Consommation Journalière, Mensuelle et Annuelle.\nValorisation au coût de revient.")
+
         elif mode == "ca_category":
             tk.Label(self.controls_frame, text="Du:", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
             self.start_date_entry = tk.Entry(self.controls_frame, width=12, bg="#455a64", fg="white", insertbackground="white")
@@ -1616,6 +1696,93 @@ class SituationFrame(ttk.Frame):
                 self.info_text.delete(1.0, tk.END)
                 self.info_text.insert(tk.END, "Sélectionnez une période et cliquez sur 'Générer Rapport PDF' pour voir l'état du chiffre d'affaire par famille.")
 
+        elif mode == "stock_valuation":
+            # Product Selection
+            tk.Label(self.controls_frame, text="Produit:", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            products = self.app.db.get_all_products()
+            self.product_var = tk.StringVar()
+            self.product_combo = ttk.Combobox(self.controls_frame, textvariable=self.product_var, width=30)
+            self.product_combo['values'] = [f"{p['id']} - {p['nom']}" for p in products]
+            self.product_combo.pack(side=tk.LEFT, padx=5)
+
+            # Date Selection
+            tk.Label(self.controls_frame, text="Du:", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            self.start_date_entry = tk.Entry(self.controls_frame, width=12, bg="#455a64", fg="white", insertbackground="white")
+            self.start_date_entry.insert(0, datetime.now().strftime("%Y-%m-01"))
+            self.start_date_entry.pack(side=tk.LEFT, padx=5)
+            
+            tk.Label(self.controls_frame, text="Au:", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            self.end_date_entry = tk.Entry(self.controls_frame, width=12, bg="#455a64", fg="white", insertbackground="white")
+            self.end_date_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
+            self.end_date_entry.pack(side=tk.LEFT, padx=5)
+            
+            # Buttons
+            tk.Button(self.controls_frame, text="Excel", bg="#4caf50", fg="white", 
+                     command=self.generate_stock_val_excel).pack(side=tk.RIGHT, padx=5)
+            tk.Button(self.controls_frame, text="PDF", bg=ACCENT_COLOR, fg="white", 
+                     command=self.generate_stock_val_pdf).pack(side=tk.RIGHT, padx=5)
+            
+            if hasattr(self, 'info_text'):
+                self.info_text.delete(1.0, tk.END)
+                self.info_text.insert(tk.END, "Rapport de Stock Valorisé.\nSélectionnez un produit et une période.\nLes calculs sont basés sur le Coût de Revient (Prix Unitaire) de la table Produits.")
+
+        elif mode == "valorized_movements":
+            tk.Label(self.controls_frame, text="Date Journée (N):", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            
+            if DateEntry:
+                self.date_entry = DateEntry(self.controls_frame, width=12, background='darkblue',
+                                            foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
+                self.date_entry.pack(side=tk.LEFT, padx=5)
+            else:
+                self.date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+                self.date_entry = tk.Entry(self.controls_frame, textvariable=self.date_var, width=15, bg="#455a64", fg="white", insertbackground="white")
+                self.date_entry.pack(side=tk.LEFT, padx=5)
+            
+            tk.Button(self.controls_frame, text="Générer Rapport PDF", bg=ACCENT_COLOR, fg="white", 
+                     command=self.export_pdf).pack(side=tk.RIGHT, padx=5)
+            
+            if hasattr(self, 'info_text'):
+                self.info_text.delete(1.0, tk.END)
+                self.info_text.insert(tk.END, "Génère l'ÉTAT DES MOUVEMENTS DES STOCKS VALORISES pour la journée choisie.\nFormat PDF A4 Paysage. Deux tableaux : Quantités et Valeurs.")
+
+        elif mode == "annual_receivables":
+            tk.Label(self.controls_frame, text="Situation au (Date N):", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            
+            if DateEntry:
+                self.date_entry = DateEntry(self.controls_frame, width=12, background='darkblue',
+                                            foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
+                self.date_entry.pack(side=tk.LEFT, padx=5)
+            else:
+                self.date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+                self.date_entry = tk.Entry(self.controls_frame, textvariable=self.date_var, width=15, bg="#455a64", fg="white", insertbackground="white")
+                self.date_entry.pack(side=tk.LEFT, padx=5)
+            
+            tk.Button(self.controls_frame, text="Générer Rapport (PDF & Excel)", bg=ACCENT_COLOR, fg="white", 
+                     command=self.export_pdf).pack(side=tk.RIGHT, padx=5)
+            
+            if hasattr(self, 'info_text'):
+                self.info_text.delete(1.0, tk.END)
+                self.info_text.insert(tk.END, "Génère l'ÉTAT RÉCAPITULATIF ANNUEL DES CRÉANCES ET RECOUVREMENT CLIENTS.\nCalculs basés sur :\n- Solde au 01/01 (Report N-1 + Historique)\n- Mouvements de l'année (Achats Net, Paiements)\n- Solde Final et % Recouvrement.")
+
+        elif mode == "annual_receivables":
+            tk.Label(self.controls_frame, text="Situation au (Date N):", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            
+            if DateEntry:
+                self.date_entry = DateEntry(self.controls_frame, width=12, background='darkblue',
+                                            foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
+                self.date_entry.pack(side=tk.LEFT, padx=5)
+            else:
+                self.date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+                self.date_entry = tk.Entry(self.controls_frame, textvariable=self.date_var, width=15, bg="#455a64", fg="white", insertbackground="white")
+                self.date_entry.pack(side=tk.LEFT, padx=5)
+            
+            tk.Button(self.controls_frame, text="Générer Rapport (PDF & Excel)", bg=ACCENT_COLOR, fg="white", 
+                     command=self.export_pdf).pack(side=tk.RIGHT, padx=5)
+            
+            if hasattr(self, 'info_text'):
+                self.info_text.delete(1.0, tk.END)
+                self.info_text.insert(tk.END, "Génère l'ÉTAT RÉCAPITULATIF ANNUEL DES CRÉANCES ET RECOUVREMENT CLIENTS.\nCalculs basés sur :\n- Solde au 01/01 (Report N-1 + Historique)\n- Mouvements de l'année (Achats Net, Paiements)\n- Solde Final et % Recouvrement.")
+
     def load_situation(self, event=None):
         if self.mode.get() != "client": return
         
@@ -1627,12 +1794,12 @@ class SituationFrame(ttk.Frame):
         
         self.info_text.delete(1.0, tk.END)
         self.info_text.insert(tk.END, f"Client: {situation['client']['raison_sociale']}\n")
-        self.info_text.insert(tk.END, f"Seuil de crédit: {situation['client']['seuil_credit']:.2f} DA\n\n")
-        self.info_text.insert(tk.END, f"Report N-1: {situation['balance']['report']:.2f} DA\n")
-        self.info_text.insert(tk.END, f"Total Paiements: {situation['balance']['total_paiements']:.2f} DA\n")
-        self.info_text.insert(tk.END, f"Total Avoirs: {situation['balance']['total_avoirs']:.2f} DA\n")
-        self.info_text.insert(tk.END, f"Total Factures: {situation['balance']['total_factures']:.2f} DA\n")
-        self.info_text.insert(tk.END, f"\nSOLDE: {situation['balance']['solde']:.2f} DA\n")
+        self.info_text.insert(tk.END, f"Seuil de crédit: {format_currency(situation['client']['seuil_credit'])} DA\n\n")
+        self.info_text.insert(tk.END, f"Report N-1: {format_currency(situation['balance']['report'])} DA\n")
+        self.info_text.insert(tk.END, f"Total Paiements: {format_currency(situation['balance']['total_paiements'])} DA\n")
+        self.info_text.insert(tk.END, f"Total Avoirs: {format_currency(situation['balance']['total_avoirs'])} DA\n")
+        self.info_text.insert(tk.END, f"Total Factures: {format_currency(situation['balance']['total_factures'])} DA\n")
+        self.info_text.insert(tk.END, f"\nSOLDE: {format_currency(situation['balance']['solde'])} DA\n")
 
     def export_pdf(self):
         from utils import generate_situation_pdf, generate_daily_sales_pdf, generate_sales_by_category_pdf
@@ -1640,7 +1807,66 @@ class SituationFrame(ttk.Frame):
         
         mode = self.mode.get()
         
-        if mode == "client":
+        if mode == "valorized_movements":
+            from reports import generate_movements_valorises_pdf
+            
+            if DateEntry and hasattr(self, 'date_entry') and isinstance(self.date_entry, DateEntry):
+                date_str = self.date_entry.get_date().strftime("%Y-%m-%d")
+            elif hasattr(self, 'date_var'):
+                date_str = self.date_var.get()
+            else:
+                return
+
+            try:
+                datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                messagebox.showerror("Erreur", "Format de date invalide")
+                return
+
+            try:
+                pdf_path = generate_movements_valorises_pdf(date_str)
+                messagebox.showinfo("Succès", f"Rapport généré :\n- {os.path.basename(pdf_path)}")
+                preview_and_print_pdf(pdf_path)
+            except Exception as e:
+                messagebox.showerror("Erreur", f"Erreur lors de la génération :\n{e}")
+                print(f"ERROR: {e}")
+            return
+
+        elif mode == "annual_receivables":
+            from reports import generate_annual_receivables_pdf, generate_annual_receivables_excel
+            
+            # Date retrieval
+            if DateEntry and hasattr(self, 'date_entry') and isinstance(self.date_entry, DateEntry):
+                date_str = self.date_entry.get_date().strftime("%Y-%m-%d")
+            elif hasattr(self, 'date_var'):
+                date_str = self.date_var.get()
+            else:
+                return
+
+            try:
+                datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                messagebox.showerror("Erreur", "Format de date invalide")
+                return
+
+            try:
+                # Fetch Data
+                data = self.app.logic.get_annual_receivables_data(date_str)
+                
+                # Generate both
+                excel_path = generate_annual_receivables_excel(data, date_str)
+                pdf_path = generate_annual_receivables_pdf(data, date_str)
+                
+                messagebox.showinfo("Succès", f"Rapports générés :\n- {os.path.basename(excel_path)}\n- {os.path.basename(pdf_path)}")
+                preview_and_print_pdf(pdf_path)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                messagebox.showerror("Erreur", f"Erreur lors de la génération :\n{e}")
+            return
+
+
+        elif mode == "client":
             selected = self.client_var.get()
             if not selected:
                 messagebox.showwarning("Erreur", "Veuillez sélectionner un client")
@@ -1699,6 +1925,73 @@ class SituationFrame(ttk.Frame):
             except Exception as e:
                 messagebox.showerror("Erreur PDF", f"Erreur lors de la génération: {str(e)}")
                 print(f"DEBUG ERROR: {e}")
+
+        elif mode == "global_consumption":
+            from reports import generate_global_consumption_pdf, generate_global_consumption_excel
+            
+            # Date retrieval
+            if DateEntry and hasattr(self, 'date_entry') and isinstance(self.date_entry, DateEntry):
+                date_str = self.date_entry.get_date().strftime("%Y-%m-%d")
+            elif hasattr(self, 'date_var'):
+                date_str = self.date_var.get()
+            else:
+                return
+
+            try:
+                datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                messagebox.showerror("Erreur", "Format de date invalide")
+                return
+
+            try:
+                # Generate both
+                excel_path = generate_global_consumption_excel(date_str)
+                pdf_path = generate_global_consumption_pdf(date_str)
+                
+                messagebox.showinfo("Succès", f"Rapports générés :\n- {os.path.basename(excel_path)}\n- {os.path.basename(pdf_path)}")
+                preview_and_print_pdf(pdf_path)
+            except Exception as e:
+                messagebox.showerror("Erreur", f"Erreur lors de la génération :\n{e}")
+
+    def generate_stock_val_excel(self):
+        self._generate_stock_report("excel")
+
+    def generate_stock_val_pdf(self):
+        self._generate_stock_report("pdf")
+
+    def _generate_stock_report(self, format_type):
+        product_sel = self.product_var.get()
+        if not product_sel:
+            messagebox.showwarning("Attention", "Veuillez sélectionner un produit.")
+            return
+
+        product_id = int(product_sel.split(' - ')[0])
+        start = self.start_date_entry.get()
+        end = self.end_date_entry.get()
+
+        try:
+            datetime.strptime(start, "%Y-%m-%d")
+            datetime.strptime(end, "%Y-%m-%d")
+        except ValueError:
+             messagebox.showerror("Erreur", "Format de date invalide (YYYY-MM-DD)")
+             return
+             
+        data = self.app.logic.get_stock_valuation_data(product_id, start, end)
+        if not data or not data.get('data'):
+             messagebox.showinfo("Info", "Aucune donnée trouvée pour cette période.")
+             return
+             
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if format_type == "excel":
+            filename = f"Etat_Stock_Valorise_{product_id}_{timestamp}.xlsx"
+            generate_stock_valuation_excel(data, filename)
+            try: os.startfile(filename)
+            except: pass
+        else:
+            filename = f"Etat_Stock_Valorise_{product_id}_{timestamp}.pdf"
+            generate_stock_valuation_pdf(data, filename)
+            try: os.startfile(filename)
+            except: pass
 
 
 # ==================== STOCK FRAME ====================
@@ -1818,10 +2111,10 @@ class StockFrame(ttk.Frame):
                 p.get('code_produit', ''),
                 display_name,
                 p['unite'],
-                f"{stock_initial:.2f}",
-                f"{total_in:.2f}",
-                f"{total_out:.2f}",
-                f"{stock_final:.2f}",
+                format_quantity(stock_initial, p['unite']),
+                format_quantity(total_in, p['unite']),
+                format_quantity(total_out, p['unite']),
+                format_quantity(stock_final, p['unite']),
                 ref_stock
             ), tags=(tag,))
 
@@ -1911,7 +2204,11 @@ class PricesFrame(ttk.Frame):
         for p in products:
             frame = tk.LabelFrame(self, text=p['nom'], bg=BG_COLOR, fg=TEXT_COLOR)
             frame.pack(fill=tk.X, padx=40, pady=10)
-            tk.Label(frame, text=f"Prix actuel: {p['prix_actuel']:.2f} DA", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=10)
+        for p in products:
+            frame = tk.LabelFrame(self, text=p['nom'], bg=BG_COLOR, fg=TEXT_COLOR)
+            frame.pack(fill=tk.X, padx=40, pady=10)
+            tk.Label(frame, text=f"Prix actuel: {format_currency(p['prix_actuel'])} DA", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=10)
+            tk.Button(frame, text="Modifier", command=lambda pid=p['id']: self.update_price(pid)).pack(side=tk.RIGHT, padx=10)
             tk.Button(frame, text="Modifier", command=lambda pid=p['id']: self.update_price(pid)).pack(side=tk.RIGHT, padx=10)
     
     def update_price(self, product_id):
@@ -2048,7 +2345,10 @@ class ClientDialog:
                 
                 self.entries['solde'].config(state='normal', fg=color, disabledforeground=color, font=("Arial", 10, "bold"))
                 self.entries['solde'].delete(0, tk.END)
-                self.entries['solde'].insert(0, f"{solde:.2f}")
+                self.entries['solde'].config(state='normal', fg=color, disabledforeground=color, font=("Arial", 10, "bold"))
+                self.entries['solde'].delete(0, tk.END)
+                self.entries['solde'].insert(0, format_currency(solde))
+                self.entries['solde'].config(state='readonly')
                 self.entries['solde'].config(state='readonly')
             except Exception as e:
                 print(f"Error loading balance: {e}")
@@ -2062,8 +2362,16 @@ class ClientDialog:
                 messagebox.showwarning("Attention", "La Raison Sociale est obligatoire")
                 return
 
-            data['seuil_credit'] = float(data.get('seuil_credit') or 0)
-            data['report_n_moins_1'] = float(data.get('report_n_moins_1') or 0)
+            # Check Duplicates
+            code_client = data.get('code_client')
+            raison_sociale = data.get('raison_sociale')
+            exists, msg = get_db().check_client_exists(code_client, raison_sociale, exclude_id=self.client_id)
+            if exists:
+                messagebox.showerror("Erreur doublon", msg)
+                return
+
+            data['seuil_credit'] = parse_currency(data.get('seuil_credit') or 0)
+            data['report_n_moins_1'] = parse_currency(data.get('report_n_moins_1') or 0)
             
             if self.client_id:
                 get_db().update_client(self.client_id, **data)
@@ -2195,7 +2503,7 @@ class ContractDialog:
              date_fin = self.end_date.get()
         
         try:
-            montant = float(self.montant_entry.get())
+            montant = parse_currency(self.montant_entry.get())
         except:
             montant = 0.0
 
@@ -2244,6 +2552,24 @@ class ContractDialog:
         self.montant_entry.delete(0, tk.END)
         self.montant_entry.insert(0, "0.0")
         self.btn_save.config(text="Ajouter")
+        self.montant_entry.bind('<FocusOut>', lambda e: self._format_entry(self.montant_entry, currency=True))
+        
+    def _format_entry(self, entry_widget, currency=True):
+        val = entry_widget.get()
+        if not val: return
+        try:
+            num = parse_currency(val)
+            if currency:
+                formatted = format_number(num, 2)
+            else:
+                formatted = format_number(num, 2) # Default quantity decimals. Or detect unit?
+                # Actually quantity formatting depends on unit. 
+                # For input, let's stick to 2 decimals standard or just clean it up.
+                # Or just standard currency-like formatting for now (thousands space).
+            
+            entry_widget.delete(0, tk.END)
+            entry_widget.insert(0, formatted)
+        except: pass
 
     def delete_contract(self):
         sel = self.tree.selection()
@@ -2852,6 +3178,11 @@ class ReceptionDialog:
             
             if self.reception_id:
                 # Update existing reception
+                
+                # 1. Revert previous stock impact (if any)
+                # This ensures we start clean before applying new quantity/location
+                get_logic().revert_reception_stock_impact(self.reception_id)
+                
                 conn = get_db()._get_connection()
                 try:
                      # Check if columns exist (graceful fallback if DB not migrated in runtime? No, we migrated)
@@ -2866,9 +3197,10 @@ class ReceptionDialog:
                            matricule_remorque, num_bt, date_bt, num_fact, date_fact, self.reception_id))
                      conn.commit()
                      
-                     # Simple logic update: just log simple edit or assume stock was handled
-                     # If quantity changed, stock should ideally be adjusted, but that's complex logic
-                     # For now, we assume this is mostly metadata correction.
+                     # 2. Apply new stock impact
+                     # Now that DB has new values, process_reception will read them and apply correct movement
+                     get_logic().process_reception(self.reception_id, self.user_id)
+                     
                 except Exception as ex:
                      messagebox.showerror("Erreur SQL", str(ex))
                      return
@@ -2958,8 +3290,17 @@ class InvoiceDialog:
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X)
         
         if not self.readonly:
-            tk.Button(btn_frame, text=f"Confirmer {self.type_doc}", bg="#2e7d32", fg="white", 
-                     font=("Arial", 11, "bold"), command=self.save).pack(side=tk.RIGHT, padx=20)
+            # Two-Step Validation
+            if self.type_doc == 'Facture':
+                 tk.Button(btn_frame, text="Confirmer avec impression", bg="#2e7d32", fg="white", 
+                          font=("Arial", 11, "bold"), command=self.save_validate).pack(side=tk.RIGHT, padx=5)
+                 
+                 tk.Button(btn_frame, text="Confirmer sans impression", bg="#f9a825", fg="black", 
+                          font=("Arial", 11, "bold"), command=self.save_draft).pack(side=tk.RIGHT, padx=5)
+            else:
+                 # Avoir - Standard Confirm
+                 tk.Button(btn_frame, text="Confirmer Avoir", bg="#2e7d32", fg="white", 
+                          font=("Arial", 11, "bold"), command=self.save_validate).pack(side=tk.RIGHT, padx=20)
         
         tk.Button(btn_frame, text="Imprimer", bg=ACCENT_COLOR, fg="white", 
                  font=("Arial", 11, "bold"), command=self.print_preview).pack(side=tk.RIGHT, padx=20)
@@ -2974,40 +3315,38 @@ class InvoiceDialog:
         cancel_text = "Fermer" if self.readonly else "Annuler"
         tk.Button(btn_frame, text=cancel_text, command=self.dialog.destroy).pack(side=tk.RIGHT, padx=20)
 
-        # Footer Totals (Yellow Box) - ONLY IN READONLY VIEW - Moved here for correct packing order
-        if self.readonly:
-            # Increased padding for height and reduced font sizes
-            footer_frame = tk.Frame(self.dialog, bg="#fff9c4", padx=10, pady=20, relief="solid", borderwidth=1)
-            # Pack above buttons
-            footer_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=(0, 10))
-            
-            # Left side: Amount in words
-            left_footer = tk.Frame(footer_frame, bg="#fff9c4")
-            left_footer.pack(side=tk.LEFT, fill=tk.Y)
+        # Footer Totals (Yellow Box) - ALWAYS VISIBLE
+        # Increased padding for height and reduced font sizes
+        footer_frame = tk.Frame(self.dialog, bg="#fff9c4", padx=10, pady=20, relief="solid", borderwidth=1)
+        # Pack above buttons
+        footer_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=(0, 10))
+        
+        # Left side: Amount in words
+        left_footer = tk.Frame(footer_frame, bg="#fff9c4")
+        left_footer.pack(side=tk.LEFT, fill=tk.Y)
 
-            self.lbl_montant_lettres = tk.Label(left_footer, text="Arrêter la présente facture à la somme de : ...", 
-                                              bg="#fff9c4", fg="black", font=("Arial", 10, "italic"), wraplength=400, justify="left")
-            self.lbl_montant_lettres.pack(anchor="w", padx=10)
-            
-            # Transport Info (Requested by user)
-            self.lbl_footer_transport = tk.Label(left_footer, text="", bg="#fff9c4", fg="#455a64", font=("Arial", 9), justify="left")
-            self.lbl_footer_transport.pack(anchor="w", padx=10, pady=(5,0))
-            
-            # Right side: Totals
-            totals_subframe = tk.Frame(footer_frame, bg="#fff9c4")
-            totals_subframe.pack(side=tk.RIGHT, padx=10)
-            
-            # Using grid to ensure horizontal alignment (HT - TVA - TTC)
-            
-            self.lbl_total_ht = tk.Label(totals_subframe, text="Montant HT: 0.00 DA", bg="#fff9c4", fg="black", font=("Arial", 10, "bold"))
-            self.lbl_total_ht.grid(row=0, column=0, sticky="e", padx=(0, 20))
-            
-            self.lbl_total_tva = tk.Label(totals_subframe, text="Montant TVA: 0.00 DA", bg="#fff9c4", fg="black", font=("Arial", 10, "bold"))
-            self.lbl_total_tva.grid(row=0, column=1, sticky="e", padx=(0, 20))
+        self.lbl_montant_lettres = tk.Label(left_footer, text="Arrêter la présente facture à la somme de : ...", 
+                                          bg="#fff9c4", fg="black", font=("Arial", 10, "italic"), wraplength=400, justify="left")
+        self.lbl_montant_lettres.pack(anchor="w", padx=10)
+        
+        # Transport Info (Requested by user)
+        self.lbl_footer_transport = tk.Label(left_footer, text="", bg="#fff9c4", fg="#455a64", font=("Arial", 9), justify="left")
+        self.lbl_footer_transport.pack(anchor="w", padx=10, pady=(5,0))
+        
+        # Right side: Totals
+        totals_subframe = tk.Frame(footer_frame, bg="#fff9c4")
+        totals_subframe.pack(side=tk.RIGHT, padx=10)
+        
+        # Using grid to ensure horizontal alignment (HT - TVA - TTC)
+        
+        self.lbl_total_ht = tk.Label(totals_subframe, text="Montant HT: 0.00 DA", bg="#fff9c4", fg="black", font=("Arial", 10, "bold"))
+        self.lbl_total_ht.grid(row=0, column=0, sticky="e", padx=(0, 20))
+        
+        self.lbl_total_tva = tk.Label(totals_subframe, text="Montant TVA: 0.00 DA", bg="#fff9c4", fg="black", font=("Arial", 10, "bold"))
+        self.lbl_total_tva.grid(row=0, column=1, sticky="e", padx=(0, 20))
 
-            self.lbl_total_ttc = tk.Label(totals_subframe, text="Montant TTC: 0.00 DA", bg="#fff9c4", fg="#d50000", font=("Arial", 12, "bold"))
-            self.lbl_total_ttc.grid(row=0, column=2, sticky="e")
-
+        self.lbl_total_ttc = tk.Label(totals_subframe, text="Montant TTC: 0.00 DA", bg="#fff9c4", fg="#d50000", font=("Arial", 12, "bold"))
+        self.lbl_total_ttc.grid(row=0, column=2, sticky="e")
         # Top Frame: Header Info (Green Box) - ONLY IN READONLY VIEW
         if self.readonly:
             header_frame = tk.Frame(self.dialog, bg="#dcedc8", padx=10, pady=5, relief="solid", borderwidth=1)
@@ -3051,6 +3390,53 @@ class InvoiceDialog:
 
              tk.Button(top_frame, text="Charger Facture", command=self._load_facture_origine).pack(side=tk.LEFT, padx=5)
              
+        # Header Info (Black Box) - Right Aligned (Shifted Left for Calendar)
+        header_right_frame = tk.Frame(top_frame, bg="black", padx=10, pady=5, relief="solid", borderwidth=2)
+        # Shift away from right edge by 250px to allow calendar visibility
+        header_right_frame.pack(side=tk.RIGHT, padx=(10, 300))
+        
+        # 1. Invoice Number
+        import datetime
+        
+        invoice_num_text = "N° Facture: --"
+        if self.view_facture_id:
+             # Fetched in load_view_data
+             invoice_num_text = "N° Facture: ..." 
+        elif self.facture_origine_id:
+             # Avoir logic
+             pass 
+        else:
+             # New Invoice Preview
+             try:
+                 cur_year = datetime.datetime.now().year
+                 next_num = self.app.db.get_next_invoice_number(self.type_doc, cur_year)
+                 invoice_num_text = f"N° Facture: {next_num}"
+             except:
+                 invoice_num_text = "N° Facture: Nouveau"
+
+        self.lbl_invoice_num = tk.Label(header_right_frame, text=invoice_num_text, font=("Arial", 12, "bold"), fg="white", bg="black")
+        self.lbl_invoice_num.pack(anchor="e")
+        
+        # 2. System Date
+        now_str = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+        self.lbl_sys_date = tk.Label(header_right_frame, text=f"Système: {now_str}", font=("Arial", 10), fg="#cfd8dc", bg="black")
+        self.lbl_sys_date.pack(anchor="e")
+        
+        # 3. Modifiable Date Field
+        date_frame = tk.Frame(header_right_frame, bg="black")
+        date_frame.pack(anchor="e", pady=(5, 0))
+        
+        tk.Label(date_frame, text="Date Facture:", font=("Arial", 10), fg="white", bg="black").pack(side=tk.LEFT, padx=5)
+        
+        if DateEntry:
+            self.date_facture_entry = DateEntry(date_frame, width=12, background='darkblue',
+                                                foreground='white', borderwidth=2, date_pattern='dd/mm/yyyy')
+        else:
+            self.date_facture_entry = tk.Entry(date_frame, width=12)
+            self.date_facture_entry.insert(0, datetime.datetime.now().strftime("%d/%m/%Y"))
+            
+        self.date_facture_entry.pack(side=tk.LEFT)
+
         # Motif Frame (Separate line for Avoir)
         if self.type_doc == 'Avoir':
              motif_frame = tk.Frame(self.dialog, padx=20, pady=5)
@@ -3085,9 +3471,18 @@ class InvoiceDialog:
         transport_frame.pack(fill=tk.X, padx=20, pady=5)
         
         tk.Label(transport_frame, text="Chauffeur:").pack(side=tk.LEFT, padx=5)
-        self.chauffeur_entry = tk.Entry(transport_frame, width=20, bg="#455a64", fg="white", insertbackground="white")
-        if self.readonly: self.chauffeur_entry.config(state='disabled')
+        self.chauffeur_var = tk.StringVar()
+        self.chauffeur_entry = ttk.Combobox(transport_frame, textvariable=self.chauffeur_var, width=20)
+        if not self.readonly:
+             try:
+                 uniques = self.app.db.get_unique_chauffeurs()
+                 self.chauffeur_entry['values'] = uniques
+             except: pass
+        else:
+             self.chauffeur_entry.config(state='disabled')
+
         self.chauffeur_entry.pack(side=tk.LEFT, padx=5)
+        self.chauffeur_entry.bind("<<ComboboxSelected>>", self._on_chauffeur_select)
         
         tk.Label(transport_frame, text="Matricule Tracteur:").pack(side=tk.LEFT, padx=5)
         self.mat_tracteur_entry = tk.Entry(transport_frame, width=15, bg="#455a64", fg="white", insertbackground="white")
@@ -3098,6 +3493,19 @@ class InvoiceDialog:
         self.mat_remorque_entry = tk.Entry(transport_frame, width=15, bg="#455a64", fg="white", insertbackground="white")
         if self.readonly: self.mat_remorque_entry.config(state='disabled')
         self.mat_remorque_entry.pack(side=tk.LEFT, padx=5)
+
+        tk.Label(transport_frame, text="Transporteur:").pack(side=tk.LEFT, padx=5)
+        self.transporteur_var = tk.StringVar()
+        self.transporteur_combo = ttk.Combobox(transport_frame, textvariable=self.transporteur_var, width=20)
+        if not self.readonly:
+             try:
+                 # Populate from Logic/DB
+                 uniques = self.app.db.get_unique_transporteurs()
+                 self.transporteur_combo['values'] = uniques
+             except: pass
+        else:
+             self.transporteur_combo.config(state='disabled')
+        self.transporteur_combo.pack(side=tk.LEFT, padx=5)
 
         # Type de Vente Checkboxes
         if self.type_doc == 'Facture':
@@ -3149,6 +3557,13 @@ class InvoiceDialog:
             
             # Load products with more robust keys
             self.products = self.app.db.get_all_products()
+            
+            # Identify parents (any product that is a parent of another)
+            parent_ids = set()
+            for p in self.products:
+                if p.get('parent_stock_id'):
+                    parent_ids.add(p['parent_stock_id'])
+
             self.prod_map = {}
             for p in self.products:
                 code = p.get('code_produit', '')
@@ -3159,8 +3574,10 @@ class InvoiceDialog:
                 else:
                     label = f"{p['id']} - {nom}"
                 
-                # Prefix check
-                if p.get('parent_stock_id'):
+                # Check for Parent/Child
+                if p['id'] in parent_ids:
+                    label = f"*** [GROUPE] {label} ***"
+                elif p.get('parent_stock_id'):
                     label = f"[PRIX] {label}"
                     
                 self.prod_map[label] = p
@@ -3252,6 +3669,39 @@ class InvoiceDialog:
 
 
 
+
+    def _update_footer(self):
+        # Calculate totals from self.lignes
+        total_ht = 0.0
+        total_tva = 0.0
+        
+        for ligne in self.lignes:
+             qty = ligne['quantite']
+             price = ligne['prix_unitaire'] # Net price
+             
+             # Calculate Line Totals
+             l_ht = qty * price
+             
+             # Get TVA Rate for product
+             product = self.app.db.get_product_by_id(ligne['product_id'])
+             tva_rate = product.get('tva', 19.0) if product else 19.0
+             
+             l_tva = l_ht * (tva_rate / 100)
+             
+             total_ht += l_ht
+             total_tva += l_tva
+             
+        total_ttc = total_ht + total_tva
+        
+        if hasattr(self, 'lbl_total_ht'):
+             self.lbl_total_ht.config(text=f"Montant HT: {format_currency(total_ht)}")
+             self.lbl_total_tva.config(text=f"Montant TVA: {format_currency(total_tva)}")
+             self.lbl_total_ttc.config(text=f"Montant TTC: {format_currency(total_ttc)}")
+             
+        # Optional: Update amount in words if needed, but maybe too heavy to do real-time?
+        # Let's keep it simple for now or fetch num2words if available.
+        # Ideally, we display "..." until saved or just basic info.
+
     def open_payment_dialog(self):
         if not self.view_facture_id: return
         
@@ -3287,6 +3737,14 @@ class InvoiceDialog:
         print(f"DEBUG: Found product in map: {product is not None}")
         
         if product:
+             # PARENT PRODUCT CHECK
+             if self.app.logic.is_parent_product(product['id']):
+                  messagebox.showerror("Interdit", f"Le produit '{product['nom']}' est un produit parent (Groupe/Code de prix).\n\nIl est interdit de le vendre directement.\nVeuillez sélectionner un produit enfant spécifique.")
+                  self.prod_code_var.set('')
+                  self.selected_product = None
+                  self.lbl_designation.config(text="-")
+                  return
+
              self.selected_product = product
              self.lbl_designation.config(text=product.get('nom', ''))
              
@@ -3434,16 +3892,18 @@ class InvoiceDialog:
 
              # 2. Populate Transport Details from Invoice (fac)
              if self.chauffeur_entry and fac.get('chauffeur'):
-                 self.chauffeur_entry.delete(0, tk.END)
-                 self.chauffeur_entry.insert(0, str(fac['chauffeur']))
+                 self.chauffeur_entry.set(str(fac['chauffeur']))
                  
              if self.mat_tracteur_entry and fac.get('matricule_tracteur'):
                  self.mat_tracteur_entry.delete(0, tk.END)
-                 self.mat_tracteur_entry.insert(0, str(fac['matricule_tracteur']))
+                 self.mat_tracteur_entry.insert(0, facture['matricule_tracteur'])
                  
              if self.mat_remorque_entry and fac.get('matricule_remorque'):
                  self.mat_remorque_entry.delete(0, tk.END)
                  self.mat_remorque_entry.insert(0, str(fac['matricule_remorque']))
+
+             if self.transporteur_combo and fac.get('transporteur'):
+                  self.transporteur_combo.set(str(fac['transporteur']))
              # --------------------------------------
              
              # Clear existing lines
@@ -3469,6 +3929,8 @@ class InvoiceDialog:
                   p = self.app.db.get_product_by_id(pid)
                   if p:
                       self._add_ligne_internal(p, qte, prix)
+             
+             self._update_footer()
              
              # === READ ONLY MODE FOR AVOIR ===
              if self.type_doc == 'Avoir':
@@ -3513,6 +3975,31 @@ class InvoiceDialog:
                  
         except Exception as e:
             messagebox.showerror("Erreur Loading", f"Impossible de charger la facture: {str(e)}")
+
+    def _on_chauffeur_select(self, event=None):
+        """Auto-fill transport info when chauffeur is selected"""
+        try:
+            val = self.chauffeur_entry.get()
+            if not val: return
+            
+            info = self.app.db.get_last_transport_info_by_chauffeur(val)
+            if info:
+                # Tracteur
+                if self.mat_tracteur_entry and info.get('matricule_tracteur'):
+                    self.mat_tracteur_entry.delete(0, tk.END)
+                    self.mat_tracteur_entry.insert(0, info['matricule_tracteur'])
+                
+                # Remorque
+                if self.mat_remorque_entry and info.get('matricule_remorque'):
+                    self.mat_remorque_entry.delete(0, tk.END)
+                    self.mat_remorque_entry.insert(0, info['matricule_remorque'])
+                    
+                # Transporteur
+                if self.transporteur_combo and info.get('transporteur'):
+                    self.transporteur_combo.set(info['transporteur'])
+                    
+        except Exception as e:
+            print(f"Error auto-filling transport info: {e}")
 
     def _on_client_select(self, event):
         self._load_contracts(event)
@@ -3566,6 +4053,38 @@ class InvoiceDialog:
                 if hasattr(self, 'lbl_header_date'):
                     self.lbl_header_date.config(text=f"Date: {facture['date_facture']}")
 
+            # Update Black Box Header (Always visible if built)
+            if hasattr(self, 'lbl_invoice_num'):
+                 self.lbl_invoice_num.config(text=f"N° Facture: {facture['numero']}")
+            
+            if hasattr(self, 'lbl_sys_date'):
+                 # Show Creation Timestamp
+                 c_at = facture.get('created_at', 'Inconnu')
+                 # Try format
+                 try:
+                     # If format is YYYY-MM-DD HH:MM:SS
+                     dt = datetime.datetime.strptime(c_at, "%Y-%m-%d %H:%M:%S")
+                     c_at = dt.strftime("%d/%m/%Y %H:%M")
+                 except: pass
+                 self.lbl_sys_date.config(text=f"Système: {c_at}")
+
+            if hasattr(self, 'date_facture_entry'):
+                 # Set date from facture
+                 d_str = facture['date_facture']
+                 # d_str is likely YYYY-MM-DD
+                 if DateEntry:
+                     try:
+                         d_obj = datetime.datetime.strptime(d_str, "%Y-%m-%d").date()
+                         self.date_facture_entry.set_date(d_obj)
+                     except: pass
+                 else:
+                     self.date_facture_entry.delete(0, tk.END)
+                     self.date_facture_entry.insert(0, d_str)
+                 
+                 if self.readonly:
+                     self.date_facture_entry.config(state='disabled')
+
+
             # Client
             client_name = facture.get('client_nom') or facture.get('raison_sociale')
             self.client_var.set(f"{facture['client_id']} - {client_name}")
@@ -3599,8 +4118,7 @@ class InvoiceDialog:
             # Transport
             if facture.get('chauffeur'):
                 self.chauffeur_entry.config(state='normal')
-                self.chauffeur_entry.delete(0, tk.END)
-                self.chauffeur_entry.insert(0, facture['chauffeur'])
+                self.chauffeur_entry.set(facture['chauffeur'])
                 if self.readonly: self.chauffeur_entry.config(state='disabled')
             
             if facture.get('matricule_tracteur'):
@@ -3621,6 +4139,7 @@ class InvoiceDialog:
                 if facture.get('chauffeur'): trans_info.append(f"Chauffeur: {facture['chauffeur']}")
                 if facture.get('matricule_tracteur'): trans_info.append(f"Tracteur: {facture['matricule_tracteur']}")
                 if facture.get('matricule_remorque'): trans_info.append(f"Remorque: {facture['matricule_remorque']}")
+                if facture.get('transporteur'): trans_info.append(f"Transporteur: {facture['transporteur']}")
                 
                 if trans_info:
                     self.lbl_footer_transport.config(text=" | ".join(trans_info))
@@ -3645,28 +4164,21 @@ class InvoiceDialog:
                  
             # Populate Footer (Yellow Box)
             if self.readonly:
-                 ht = facture.get('montant_ht', 0.0)
-                 tva = facture.get('montant_tva', 0.0)
-                 ttc = facture.get('montant_ttc', 0.0)
+                total_ht = float(facture['montant_ht'])
+                total_tva = float(facture['montant_tva'])
+                total_ttc = float(facture['montant_ttc'])
+                
+                print(f"DEBUG: Setting Footer Labels -> HT={total_ht}, TVA={total_tva}, TTC={total_ttc}") # Keep debug
+                self.lbl_total_ht.config(text=f"Montant HT: {format_currency(total_ht)} DA")
+                self.lbl_total_tva.config(text=f"Montant TVA: {format_currency(total_tva)} DA")
+                self.lbl_total_ttc.config(text=f"Montant TTC: {format_currency(total_ttc)} DA")
                  
-                 # Calc TTC if missing (legacy data)
-                 if ttc == 0 and (ht > 0 or tva > 0):
-                     ttc = ht + tva
-                 
-                 print(f"DEBUG: Setting Footer Labels -> HT={ht}, TVA={tva}, TTC={ttc}") # DEBUG LOG
-                 
-                 if hasattr(self, 'lbl_total_ht'): self.lbl_total_ht.config(text=f"Montant HT: {ht:.2f} DA")
-                 if hasattr(self, 'lbl_total_tva'): self.lbl_total_tva.config(text=f"Montant TVA: {tva:.2f} DA")
-                 if hasattr(self, 'lbl_total_ttc'): 
-                     print("DEBUG: Setting TTC Label Config")
-                     self.lbl_total_ttc.config(text=f"Montant TTC: {ttc:.2f} DA")
-                 
-                 try:
-                     letter_amount = nombre_en_lettres(ttc)
-                     if hasattr(self, 'lbl_montant_lettres'):
-                         self.lbl_montant_lettres.config(text=f"Arrêter la présente facture à la somme de :\n{letter_amount}")
-                 except Exception as e:
-                     print(f"Error converting number: {e}")
+                try:
+                    letter_amount = nombre_en_lettres(total_ttc) # Use total_ttc instead of undefined ttc
+                    if hasattr(self, 'lbl_montant_lettres'):
+                        self.lbl_montant_lettres.config(text=f"Arrêter la présente facture à la somme de :\n{letter_amount}")
+                except Exception as e:
+                    print(f"Error converting number: {e}")
 
             # Lines
             self.lignes = []
@@ -3723,11 +4235,11 @@ class InvoiceDialog:
                 p_nom,
                 l.get('unite', ''),
                 format_quantity(qte, l.get('unite', '')),
-                f"{prix_initial:.2f}",
+                format_currency(prix_initial),
                 f"{taux:.1f}%",
-                f"{montant_ht:.2f}",
-                f"{tva_amount:.2f}", 
-                f"{ttc_amount:.2f}"
+                format_currency(montant_ht),
+                format_currency(tva_amount), 
+                format_currency(ttc_amount)
             ))
 
     def add_ligne(self):
@@ -3778,8 +4290,8 @@ class InvoiceDialog:
                 messagebox.showerror("Erreur", "Champs vides")
                 return
 
-            qte = float(qte_str)
-            price = float(price_str)
+            qte = parse_currency(qte_str)
+            price = parse_currency(price_str)
             
             # Update price logic
             # if abs(price - self.selected_product['prix_actuel']) > 0.01:
@@ -3794,12 +4306,7 @@ class InvoiceDialog:
                 raw_taux = self.taux_entry.get()
                 log_debug(f"DEBUG: Raw Taux='{raw_taux}'")
                 
-                clean_taux = raw_taux.replace(',', '.').replace('%', '').strip()
-                if not clean_taux:
-                    messagebox.showerror("Erreur", "Veuillez saisir un taux de remise")
-                    return
-                
-                taux = float(clean_taux)
+                taux = parse_currency(raw_taux.replace('%', '').strip())
                 if taux < 0 or taux > 100:
                     messagebox.showerror("Erreur", "Le taux doit être entre 0 et 100")
                     return
@@ -3816,6 +4323,8 @@ class InvoiceDialog:
             self.qte_entry.delete(0, tk.END)
             if self.remise_var.get():
                 self.taux_entry.delete(0, tk.END) 
+
+            self._update_footer() 
                 
         except Exception as e:
             err = traceback.format_exc()
@@ -3877,8 +4386,19 @@ class InvoiceDialog:
         # Remove from UI
         for item in selected_items:
             self.tree.delete(item)
+            
+        self._update_footer()
 
-    def save(self):
+    def save_draft(self):
+        self._save_internal(statut_final='Brouillon')
+
+    def save_validate(self):
+        # Ask confirmation for final validation
+        if not messagebox.askyesno("Confirmer", "Confirmer et valider cette facture définitivement ?\n\nCette action est irréversible (sauf par Avoir)."):
+            return
+        self._save_internal(statut_final='Validée')
+
+    def _save_internal(self, statut_final):
         try:
             client_str = self.client_var.get()
             if not client_str: 
@@ -3924,42 +4444,117 @@ class InvoiceDialog:
             chauffeur = self.chauffeur_entry.get() if hasattr(self, 'chauffeur_entry') else None
             mat_tracteur = self.mat_tracteur_entry.get() if hasattr(self, 'mat_tracteur_entry') else None
             mat_remorque = self.mat_remorque_entry.get() if hasattr(self, 'mat_remorque_entry') else None
+            transporteur = self.transporteur_combo.get() if hasattr(self, 'transporteur_combo') else None
 
             client_compte_bancaire = self.client_banque_entry.get() if hasattr(self, 'client_banque_entry') else None
             client_categorie = self.client_categorie_entry.get() if hasattr(self, 'client_categorie_entry') else None
 
-            success, msg, fid = self.app.logic.create_invoice_with_validation(
-                type_document=self.type_doc,
-                client_id=client_id,
-                lignes=self.lignes,
-                user_id=self.app.user['id'],
-                facture_origine_id=origin_id,
-                motif=motif_val,
-                type_vente=type_vente,
-                mode_paiement=mode_paiement,
-                ref_paiement=ref_paiement,
-                banque=banque,
-                contract_id=contract_id,
-                contrat_code=contrat_code,
-                chauffeur=chauffeur,
-                matricule_tracteur=mat_tracteur,
-                matricule_remorque=mat_remorque,
-                client_compte_bancaire=client_compte_bancaire,
-                client_categorie=client_categorie
-            )
-            
-            if success:
-                self.app.db.log_action(self.app.user['id'], f"CREATE_{self.type_doc.upper()}", f"Created {self.type_doc} for client {client_id}")
-                messagebox.showinfo("Succès", msg)
-                self.saved_facture_id = fid
-                if self.callback: self.callback()
-                # Offer print
-                if hasattr(self, 'saved_facture_id'):
-                     if messagebox.askyesno("Imprimer", "Voulez-vous imprimer la facture/avoir ?"):
-                        self.print_preview()
-                self.dialog.destroy()
+            # Distinguish CREATE vs UPDATE (Draft)
+            if self.view_facture_id:
+                 # === UPDATE MODE (Draft) ===
+                 success, msg = self.app.logic.update_invoice_draft(
+                     facture_id=self.view_facture_id,
+                     new_lignes=self.lignes,
+                     user_id=self.app.user['id'],
+                     client_id=client_id,
+                     type_vente=type_vente,
+                     mode_paiement=mode_paiement,
+                     ref_paiement=ref_paiement,
+                     banque=banque,
+                     contract_id=contract_id,
+                     contrat_code=contrat_code,
+                     chauffeur=chauffeur,
+                     matricule_tracteur=mat_tracteur,
+                     matricule_remorque=mat_remorque,
+                     transporteur=transporteur,
+                     client_compte_bancaire=client_compte_bancaire,
+                     client_categorie=client_categorie,
+                     motif=motif_val
+                 )
+                 # Update Header if needed (TODO: Add header update to logic if strictly required)
+                 # For now assuming user mostly updates lines. 
+                 
+                 if success and statut_final == 'Validée':
+                      # 2nd Step: Confirm
+                      success_conf, msg_conf = self.app.logic.confirm_invoice(self.view_facture_id)
+                      if not success_conf:
+                           success = False
+                           msg = f"Update OK, but Confirm Failed: {msg_conf}"
+                      else:
+                           msg = "Facture mise à jour et validée avec succès"
+                           
+                 if success:
+                     self.app.db.log_action(self.app.user['id'], "UPDATE_INVOICE", f"Updated Invoice {self.view_facture_id} Statut={statut_final}")
+                     messagebox.showinfo("Succès", msg)
+                     self.saved_facture_id = self.view_facture_id
+                     if self.callback: self.callback()
+                     if statut_final == 'Validée':
+                          if messagebox.askyesno("Imprimer", "Voulez-vous imprimer la facture ?"):
+                                self.print_preview()
+                     self.dialog.destroy()
+                 else:
+                     messagebox.showerror("Erreur", msg)
+
             else:
-                messagebox.showerror("Erreur", msg)
+                # === CREATE MODE ===
+                # Get Date from UI
+                custom_date_val = None
+                try:
+                    raw_date = None
+                    if DateEntry and isinstance(self.date_facture_entry, DateEntry):
+                        d_obj = self.date_facture_entry.get_date()
+                        custom_date_val = d_obj.strftime("%Y-%m-%d")
+                    else:
+                         raw_date = self.date_facture_entry.get()
+                         # Expected DD/MM/YYYY
+                         import datetime
+                         d_obj = datetime.datetime.strptime(raw_date, "%d/%m/%Y")
+                         custom_date_val = d_obj.strftime("%Y-%m-%d")
+                except Exception as e:
+                     print(f"Date conversion error: {e}")
+                     # Fallback to None (Today) or Error?
+                     # Ideally invalid date should block, but let's be soft for now
+                     pass
+
+                success, msg, fid = self.app.logic.create_invoice_with_validation(
+                    type_document=self.type_doc,
+                    client_id=client_id,
+                    lignes=self.lignes,
+                    user_id=self.app.user['id'],
+                    facture_origine_id=origin_id,
+                    motif=motif_val,
+                    type_vente=type_vente,
+                    mode_paiement=mode_paiement,
+                    ref_paiement=ref_paiement,
+                    banque=banque,
+                    contract_id=contract_id,
+                    contrat_code=contrat_code,
+                    chauffeur=chauffeur,
+                    matricule_tracteur=mat_tracteur,
+                    matricule_remorque=mat_remorque,
+                    transporteur=transporteur,
+                    client_compte_bancaire=client_compte_bancaire,
+                    client_categorie=client_categorie,
+                    custom_date=custom_date_val,
+
+                    statut_final=statut_final # Pass status
+                )
+                
+                if success:
+                    self.app.db.log_action(self.app.user['id'], f"CREATE_{self.type_doc.upper()}", f"Created {self.type_doc} for client {client_id}")
+                    messagebox.showinfo("Succès", msg)
+                    self.saved_facture_id = fid
+                    if self.callback: self.callback()
+                    # Offer print only if Validée (or ask user)
+                    if statut_final == 'Validée':
+                         if messagebox.askyesno("Imprimer", "Voulez-vous imprimer la facture/avoir ?"):
+                            self.print_preview()
+                    else:
+                         # Draft created
+                         pass
+                    self.dialog.destroy()
+                else:
+                    messagebox.showerror("Erreur", msg)
         except Exception as e:
             messagebox.showerror("Erreur", str(e))
 
@@ -4045,8 +4640,8 @@ class LigneDialog:
             ligne_data = {
                 'product_id': product_id,
                 'product_nom': product['nom'],
-                'quantite': float(self.qte.get()),
-                'prix_unitaire': float(self.prix.get())
+                'quantite': parse_currency(self.qte.get()),
+                'prix_unitaire': parse_currency(self.prix.get())
             }
             if self.callback:
                 self.callback(ligne_data)
@@ -4134,7 +4729,7 @@ class PaymentDialog:
             client_id = int(self.client_var.get().split(' - ')[0])
             success, msg, _ = self.app.logic.create_payment(
                 client_id=client_id,
-                montant=float(self.montant.get()),
+                montant=parse_currency(self.montant.get()),
                 mode_paiement=self.mode_var.get(),
                 reference=self.reference.get() or None,
                 banque=self.banque.get() or None,
@@ -4395,11 +4990,11 @@ class InvoiceDetailsDialog:
         text.insert(tk.END, f"Client: {facture_data['raison_sociale']}\n\n")
         text.insert(tk.END, "Lignes:\n")
         for ligne in facture_data['lignes']:
-            text.insert(tk.END, f"  - {ligne['product_nom']}: {ligne['quantite']} x {ligne['prix_unitaire']} = {ligne['montant']}\n")
+            text.insert(tk.END, f"  - {ligne['product_nom']}: {format_quantity(ligne['quantite'], ligne.get('unite', ''))} x {format_currency(ligne['prix_unitaire'])} = {format_currency(ligne['montant'])}\n")
         
-        text.insert(tk.END, f"\nTotal HT: {facture_data['montant_ht']}\n")
-        text.insert(tk.END, f"TVA: {facture_data['montant_tva']}\n")
-        text.insert(tk.END, f"Total TTC: {facture_data['montant_ttc']}\n\n")
+        text.insert(tk.END, f"\nTotal HT: {format_currency(facture_data['montant_ht'])}\n")
+        text.insert(tk.END, f"TVA: {format_currency(facture_data['montant_tva'])}\n")
+        text.insert(tk.END, f"Total TTC: {format_currency(facture_data['montant_ttc'])}\n\n")
         text.insert(tk.END, f"En lettres: {nombre_en_lettres(facture_data['montant_ttc'])}\n")
         text.config(state=tk.DISABLED)
 

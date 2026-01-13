@@ -16,6 +16,13 @@ from typing import Optional, List, Dict, Any, Tuple
 # Le programme se chargera de répercuter les changements sur le fichier .db au prochain lancement.
 # ==================================================================================
 
+# ==================================================================================
+# MASTER SCHEMA - The Single Source of Truth for Database Structure
+# ==================================================================================
+# ATTENTION : Pour toute modification de structure, mettez d'abord à jour ce MASTER_SCHEMA.
+# Le programme se chargera de répercuter les changements sur le fichier .db au prochain lancement.
+# ==================================================================================
+
 MASTER_SCHEMA = {
     "users": {
         "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -41,6 +48,7 @@ MASTER_SCHEMA = {
         "tel_2": "TEXT",
         "compte_bancaire": "TEXT",
         "categorie": "TEXT",
+        "banque": "TEXT",
         "seuil_credit": "REAL DEFAULT 0.0",
         "report_n_moins_1": "REAL DEFAULT 0.0",
         "solde_creance": "REAL DEFAULT 0.0",
@@ -124,6 +132,7 @@ MASTER_SCHEMA = {
         "chauffeur": "TEXT",
         "matricule_tracteur": "TEXT",
         "matricule_remorque": "TEXT",
+        "transporteur": "TEXT",
         "created_by": "INTEGER REFERENCES users(id)",
         "created_at": "TEXT DEFAULT CURRENT_TIMESTAMP"
     },
@@ -211,28 +220,44 @@ MASTER_SCHEMA = {
 class DatabaseManager:
     """Manages SQLite database connections and operations"""
     
-    def __init__(self, db_path: str = "gestion_commerciale.db"):
-        self.db_path = db_path
+    # Force local absolute path as requested
+    DEFAULT_DB_PATH = r"C:\GICA_PROJET\gestion_commerciale.db"
+
+    def __init__(self, db_path: str = None):
+        # Use default if not provided, else check if it's the safe path
+        if db_path is None:
+            self.db_path = self.DEFAULT_DB_PATH
+        else:
+            self.db_path = db_path
+            
         self.connection: Optional[sqlite3.Connection] = None
-        self._initialize_database()
-    
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        
+        # Start Self-Healing Process
+        self.verifier_et_reparer_base_de_donnees()
+
     def _get_connection(self) -> sqlite3.Connection:
-        """Get or create database connection"""
+        """Get or create database connection with WAL mode enabled"""
         if self.connection is None:
             self.connection = sqlite3.connect(self.db_path)
             self.connection.execute("PRAGMA foreign_keys = ON")
-            self.connection.row_factory = sqlite3.Row  # Enable column access by name
+            # Enable Write-Ahead Logging for concurrency
+            self.connection.execute("PRAGMA journal_mode=WAL;") 
+            self.connection.row_factory = sqlite3.Row
         return self.connection
     
-    def _initialize_database(self):
+    def verifier_et_reparer_base_de_donnees(self):
         """
-        Create all tables if they don't exist and migrate schema.
-        Uses MASTER_SCHEMA to ensure database integrity at startup.
+        SELF-HEALING SYSTEM
+        Compares physical database with MASTER_SCHEMA.
+        Adds missing tables and columns automatically without data loss.
         """
         conn = self._get_connection()
         cursor = conn.cursor()
         
-        # print("Checking database structure...") # Optional logging
+        print("[System] Starting Database Self-Healing...")
         
         for table_name, columns in MASTER_SCHEMA.items():
             # 1. Check if table exists
@@ -253,13 +278,19 @@ class DatabaseManager:
                         print(f"[Self-Healing] Adding missing column: {table_name}.{col_name}")
                         try:
                             # Add missing column
+                            # Note: SQLite limitation - cannot add UNIQUE or PRIMARY KEY via ALTER TABLE usually, 
+                            # but simple columns work fine.
+                            # Careful with NOT NULL on existing rows (needs default).
+                            # Our schema generally has defaults or allows NULL implicitly in logic if not strict here.
+                            # For safety, strict NOT NULLs might fail if table has data. 
+                            # But here we just try.
                             cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}")
                         except sqlite3.OperationalError as e:
                             print(f"[Error] Could not add column {col_name} to {table_name}: {e}")
-                            # Continue anyway to try other columns
         
         conn.commit()
         self._initialize_default_data()
+        print("[System] Database Self-Healing Complete.")
 
     def _initialize_default_data(self):
         """Insert default data if tables are empty"""
@@ -288,6 +319,39 @@ class DatabaseManager:
             """, products)
         
         conn.commit()
+    
+    def export_miroir(self, target_folder: str) -> bool:
+        """
+        Creates a read-only mirror copy of the database.
+        Safe for external reading (Directeur) while app is running (WAL mode).
+        """
+        import shutil
+        import time
+        
+        try:
+            if not os.path.exists(target_folder):
+                os.makedirs(target_folder, exist_ok=True)
+                
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            target_path = os.path.join(target_folder, f"gestion_MIRROR_{timestamp}.db")
+            
+            # Use SQLite Online Backup API if possible, or just copy file since WAL allows it better
+            # But standard copy might copy a locked file. 
+            # Best way with sqlite3 is using the backup API.
+            
+            src_conn = self._get_connection()
+            dst_conn = sqlite3.connect(target_path)
+            
+            with dst_conn:
+                src_conn.backup(dst_conn)
+            
+            dst_conn.close()
+            return True, target_path
+        except Exception as e:
+            print(f"Export Miroir Failed: {e}")
+            return False, str(e)
+
+
     
     def close(self):
         """Close database connection"""
@@ -416,6 +480,40 @@ class DatabaseManager:
         conn = self._get_connection()
         conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
         conn.commit()
+
+    def check_client_exists(self, code_client: str, raison_sociale: str, exclude_id: int = None) -> Tuple[bool, str]:
+        """
+        Check if a client with the same Code or Raison Sociale already exists.
+        Returns (True, message) if duplicate found, else (False, "").
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Check Code Client
+        if code_client:
+            query = "SELECT id, raison_sociale FROM clients WHERE code_client = ? AND active = 1"
+            params = [code_client]
+            if exclude_id:
+                query += " AND id != ?"
+                params.append(exclude_id)
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            if row:
+                return True, f"Un client avec le code '{code_client}' existe déjà ({row[1]})."
+
+        # Check Raison Sociale
+        if raison_sociale:
+            query = "SELECT id, code_client FROM clients WHERE raison_sociale = ? AND active = 1"
+            params = [raison_sociale]
+            if exclude_id:
+                query += " AND id != ?"
+                params.append(exclude_id)
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            if row:
+                return True, f"Un client avec la raison sociale '{raison_sociale}' existe déjà (Code: {row[1]})."
+                
+        return False, ""
 
     # ==================== CONTRACT OPERATIONS ====================
     
@@ -659,6 +757,11 @@ class DatabaseManager:
         else:  # Avoir
             return f"AV-{count:04d}-{annee}"
 
+    def get_next_invoice_number(self, type_document: str, annee: int) -> str:
+        """Preview the next number (Preview Only)"""
+        return self.generate_facture_number(type_document, annee)
+
+
     def create_facture(self, type_document: str, annee: int, date_facture: str,
                       client_id: int, facture_origine_id: int = None,
                       etat_paiement: str = 'Comptant', motif: str = None,
@@ -666,6 +769,7 @@ class DatabaseManager:
                       date_paiement: str = None, statut_facture: str = 'Non soldée',
                       contract_id: int = None,
                       chauffeur: str = None, matricule_tracteur: str = None, matricule_remorque: str = None,
+                      transporteur: str = None,
                       type_vente: str = None, mode_paiement: str = None,
                       created_by: int = None) -> int:
         """Create new invoice or credit note"""
@@ -675,21 +779,86 @@ class DatabaseManager:
         numero = self.generate_facture_number(type_document, annee)
         
         cursor.execute("""
-            INSERT INTO factures 
-            (numero, type_document, annee, date_facture, client_id, 
+            INSERT INTO factures (numero, type_document, annee, date_facture, client_id, 
              facture_origine_id, motif, type_vente, mode_paiement, 
              ref_paiement, banque, date_paiement, statut_facture, contract_id, 
-             chauffeur, matricule_tracteur, matricule_remorque, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             chauffeur, matricule_tracteur, matricule_remorque, transporteur, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (numero, type_document, annee, date_facture, client_id,
               facture_origine_id, motif, type_vente, mode_paiement,
               ref_paiement, banque, date_paiement, statut_facture, contract_id,
-              chauffeur, matricule_tracteur, matricule_remorque, created_by))
+              chauffeur, matricule_tracteur, matricule_remorque, transporteur, created_by))
 
         
         facture_id = cursor.lastrowid
         conn.commit()
         return facture_id
+    
+    
+    def get_unique_transporteurs(self) -> List[str]:
+        """Get list of unique transporteurs from both receptions and factures"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Combine both sources
+        cursor.execute("""
+            SELECT DISTINCT transporteur FROM receptions WHERE transporteur IS NOT NULL AND transporteur != ''
+            UNION
+            SELECT DISTINCT transporteur FROM factures WHERE transporteur IS NOT NULL AND transporteur != ''
+            ORDER BY transporteur
+        """)
+        
+        return [row[0] for row in cursor.fetchall()]
+
+    def get_unique_chauffeurs(self) -> List[str]:
+        """Get list of unique chauffeurs from both receptions and factures"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Combine both sources
+        cursor.execute("""
+            SELECT DISTINCT chauffeur FROM receptions WHERE chauffeur IS NOT NULL AND chauffeur != ''
+            UNION
+            SELECT DISTINCT chauffeur FROM factures WHERE chauffeur IS NOT NULL AND chauffeur != ''
+            ORDER BY chauffeur
+        """)
+        
+        return [row[0] for row in cursor.fetchall()]
+
+    def get_last_transport_info_by_chauffeur(self, chauffeur: str) -> Optional[Dict[str, str]]:
+        """
+        Get the most recent transport details (matricule, remorque, transporteur) 
+        used by a specific chauffeur.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Query both tables, prioritizing by Date
+        cursor.execute("""
+            SELECT matricule_tracteur, matricule_remorque, transporteur, created_at 
+            FROM (
+                SELECT matricule_tracteur, matricule_remorque, transporteur, created_at 
+                FROM factures 
+                WHERE chauffeur = ? AND chauffeur != ''
+                
+                UNION ALL
+                
+                SELECT matricule as matricule_tracteur, matricule_remorque, transporteur, created_at 
+                FROM receptions 
+                WHERE chauffeur = ? AND chauffeur != ''
+            )
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (chauffeur, chauffeur))
+        
+        row = cursor.fetchone()
+        if row:
+            return {
+                'matricule_tracteur': row[0],
+                'matricule_remorque': row[1],
+                'transporteur': row[2]
+            }
+        return None
     
     def add_ligne_facture(self, facture_id: int, product_id: int, 
                          quantite: float, prix_unitaire: float):

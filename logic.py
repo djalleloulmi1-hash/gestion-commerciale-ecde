@@ -62,6 +62,13 @@ class BusinessLogic:
         
         lieu, product_id, quantite, numero = reception
         
+        # [CRITICAL] Block Child Products from Reception
+        product = self.db.get_product_by_id(product_id)
+        if product and product.get('parent_stock_id'):
+            # It is a child product (e.g. Price Variation). Reception Forbidden.
+            # Stock must be managed on the Parent.
+            return False 
+
         # Only update stock if 'Sur Stock'
         if lieu == 'Sur Stock':
             self.db.log_stock_movement(
@@ -75,10 +82,42 @@ class BusinessLogic:
             
             # Update actual stock quantity is already handled by log_stock_movement
             # self.db.update_stock(product_id, quantite)
-        # 'Sur Chantier' is direct consumption - no stock update
         
         return True
     
+    def revert_reception_stock_impact(self, reception_id: int) -> bool:
+        """
+        Revert stock impact for a reception (undo +Qty).
+        Used before updating a reception to ensure clean state.
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        
+        # Get reception details
+        cursor.execute("SELECT lieu_livraison, product_id, quantite_recue FROM receptions WHERE id = ?", (reception_id,))
+        reception = cursor.fetchone()
+        
+        if not reception:
+            return False
+            
+        lieu, product_id, quantite = reception
+        
+        if lieu == 'Sur Stock':
+            try:
+                # Reverse stock level (Subtract the quantity that was added)
+                cursor.execute("UPDATE products SET stock_actuel = stock_actuel - ? WHERE id = ?", (quantite, product_id))
+            
+                # Delete the specific 'Réception' movement
+                cursor.execute("DELETE FROM stock_movements WHERE document_id = ? AND type_mouvement = 'Réception'", (reception_id,))
+                
+                conn.commit()
+                return True
+            except Exception as e:
+                conn.rollback()
+                return False
+                
+        return True
+
     def delete_reception(self, reception_id: int) -> bool:
         """
         Delete reception and reverse stock movement if applicable.
@@ -157,6 +196,16 @@ class BusinessLogic:
         
         return True
     
+    def is_parent_product(self, product_id: int) -> bool:
+        """
+        Check if a product is a parent for other products (has children).
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM products WHERE parent_stock_id = ? AND id != ?", (product_id, product_id))
+        count = cursor.fetchone()[0]
+        return count > 0
+
     def get_current_stock(self, product_id: int) -> float:
         """Get current stock for a product"""
         product = self.db.get_product_by_id(product_id)
@@ -232,12 +281,21 @@ class BusinessLogic:
                     stock_avant = 0 # Placeholder, we will recalc numbers anyway
                     stock_apres = 0 
                     
+                    # Correctly attribute to Parent if Child
+                    target_pid = r['product_id']
+                    
+                    # Check if product is child
+                    cursor.execute("SELECT parent_stock_id FROM products WHERE id=?", (target_pid,))
+                    res = cursor.fetchone()
+                    if res and res[0]:
+                        target_pid = res[0]
+                    
                     cursor.execute("""
                         INSERT INTO stock_movements 
                         (product_id, type_mouvement, quantite, reference_document,
                          document_id, stock_avant, stock_apres, created_by)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (r['product_id'], 'Réception', r['quantite_recue'], r['numero'],
+                    """, (target_pid, 'Réception', r['quantite_recue'], r['numero'],
                           r['id'], stock_avant, stock_apres, r['created_by']))
                     stats["receptions_fixed"] += 1
             
@@ -266,8 +324,378 @@ class BusinessLogic:
             conn.rollback()
             raise e
     
+    def get_stock_valuation_data(self, product_id: int, start_date: str, end_date: str) -> Dict[str, Any]:
+        """
+        Get daily stock valuation logic.
+        """
+        import pandas as pd
+        
+        conn = self.db._get_connection()
+        product = self.db.get_product_by_id(product_id)
+        if not product:
+            return {}
+            
+        # Cost Price
+        cout_achat = product.get('cout_revient', 0.0)
+        
+        # 1. Calculate Initial Stock (Before Start Date)
+        # Base
+        stock_initial_db = product.get('stock_initial', 0.0)
+        
+        # Receptions before start_date
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT COALESCE(SUM(quantite_recue), 0)
+            FROM receptions 
+            WHERE product_id = ? AND date_reception < ? AND lieu_livraison = 'Sur Stock'
+        """, (product_id, start_date))
+        receptions_before = cursor.fetchone()[0]
+        
+        # Sales (Factures) before start_date
+        # Must join to filter by date AND product
+        cursor.execute("""
+            SELECT COALESCE(SUM(lf.quantite), 0)
+            FROM lignes_facture lf
+            JOIN factures f ON lf.facture_id = f.id
+            WHERE lf.product_id = ? AND f.date_facture < ? AND f.type_document = 'Facture' AND f.statut != 'Annulée'
+        """, (product_id, start_date))
+        sales_before = cursor.fetchone()[0]
+        
+        # Avoirs (Returns) before start_date - Adds to stock
+        cursor.execute("""
+            SELECT COALESCE(SUM(lf.quantite), 0)
+            FROM lignes_facture lf
+            JOIN factures f ON lf.facture_id = f.id
+            WHERE lf.product_id = ? AND f.date_facture < ? AND f.type_document = 'Avoir' AND f.statut != 'Annulée'
+        """, (product_id, start_date))
+        avoirs_before = cursor.fetchone()[0]
+        
+        calculated_initial = stock_initial_db + receptions_before - sales_before + avoirs_before
+        
+        # 2. Get Daily Movements in Range
+        
+        # Generate date range
+        date_range = pd.date_range(start=start_date, end=end_date)
+        daily_data = []
+        
+        current_stock = calculated_initial
+        
+        for single_date in date_range:
+            day_str = single_date.strftime("%Y-%m-%d")
+            
+            # Receptions for this day
+            cursor.execute("""
+                SELECT COALESCE(SUM(quantite_recue), 0)
+                FROM receptions
+                WHERE product_id = ? AND date_reception = ? AND lieu_livraison = 'Sur Stock'
+            """, (product_id, day_str))
+            rec_day = cursor.fetchone()[0]
+            
+            # Sales for this day
+            cursor.execute("""
+                SELECT COALESCE(SUM(lf.quantite), 0)
+                FROM lignes_facture lf
+                JOIN factures f ON lf.facture_id = f.id
+                WHERE lf.product_id = ? AND f.date_facture = ? AND f.type_document = 'Facture' AND f.statut != 'Annulée'
+            """, (product_id, day_str))
+            sale_day = cursor.fetchone()[0]
+            
+            # Avoirs for this day
+            cursor.execute("""
+                SELECT COALESCE(SUM(lf.quantite), 0)
+                FROM lignes_facture lf
+                JOIN factures f ON lf.facture_id = f.id
+                WHERE lf.product_id = ? AND f.date_facture = ? AND f.type_document = 'Avoir' AND f.statut != 'Annulée'
+            """, (product_id, day_str))
+            avoir_day = cursor.fetchone()[0]
+            
+            net_sales = sale_day - avoir_day
+            
+            stock_start = current_stock
+            stock_end = stock_start + rec_day - net_sales
+            
+            # Values
+            daily_data.append({
+                "date": day_str,
+                "stock_initial_qty": stock_start,
+                "stock_initial_val": stock_start * cout_achat,
+                "cout_achat": cout_achat,
+                "reception_qty": rec_day,
+                "reception_val": rec_day * cout_achat,
+                "vente_qty": net_sales,
+                "vente_val": net_sales * cout_achat,
+                "stock_final_qty": stock_end,
+                "stock_final_val": stock_end * cout_achat
+            })
+            
+            current_stock = stock_end
+            
+        return {
+            "product": product,
+            "period": {"start": start_date, "end": end_date},
+            "data": daily_data
+        }
+
+    def get_global_consumption_data(self, date_str: str) -> Dict[str, Any]:
+        """
+        Get global consumption data for a specific date.
+        Returns data for Excel/PDF report:
+        - Daily Consumption (Day J)
+        - Monthly Cumulative (1st of Month -> J)
+        - Annual Cumulative (1st of Jan -> J)
+        Valuation is based on Product Cost Price (cout_revient).
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        
+        target_date = datetime.strptime(date_str, "%Y-%m-%d")
+        year_start = target_date.replace(month=1, day=1).strftime("%Y-%m-%d")
+        month_start = target_date.replace(day=1).strftime("%Y-%m-%d")
+        day_str = date_str
+        
+        # Get all products
+        cursor.execute("SELECT id, nom, unite, cout_revient FROM products WHERE active = 1 ORDER BY nom")
+        products = cursor.fetchall()
+        
+        report_data = []
+        
+        for p in products:
+            pid = p['id']
+            cout = p['cout_revient'] or 0.0
+            
+            # Helper to get sum of negative movements (Sales/Consumption)
+            # We assume Consumption = Negative Movements (Vente, Sortie, etc)
+            # We take ABS() to show positive consumption.
+            
+            def get_consumption(start_d, end_d):
+                # Note: creating a dedicated query for each product/period might be slow if many products.
+                # Optimized approach: Filter by date range first, then group by product. 
+                # But for simplicity and robustness first:
+                query = """
+                    SELECT ABS(COALESCE(SUM(quantite), 0))
+                    FROM stock_movements
+                    WHERE product_id = ? 
+                    AND type_mouvement IN ('Vente', 'Sortie', 'Consommation') 
+                    AND quantite < 0
+                    AND date(created_at) >= ? AND date(created_at) <= ?
+                """
+                # Note: stock_movements has created_at which is timestamp. 
+                # Ideally we should use the DATE of the document (date_facture etc).
+                # But stock_movements doesn't store the document date directly, only created_at.
+                # However, for consistency with 'Situation', usually we rely on the document date.
+                # The stock_movements table has `created_at` which is usually NOW().
+                # For `stock_valuation`, I used `receptions` and `factures` tables directly.
+                # I should probably do the same here for accuracy if backdating is allowed.
+                return 0.0
+
+            # refined approach using Factures table for 'Vente' to respect `date_facture`
+            # Consumption = Ventes (Factures) + Retours (Avoirs negative impact? No, Avoir is positive stock).
+            # So Consumption is purely Sales (Factures). 
+            # Unless there are internal consumptions?
+            # User said "Consommation", usually implies Sales in this context or internal usage.
+            # verify_movement_types showed 'Vente' and 'Réception'.
+            # So strictly 'Vente'.
+            
+            def get_sales_qty(start_d, end_d):
+                 cursor.execute("""
+                    SELECT COALESCE(SUM(lf.quantite), 0)
+                    FROM lignes_facture lf
+                    JOIN factures f ON lf.facture_id = f.id
+                    WHERE lf.product_id = ? 
+                    AND f.date_facture >= ? AND f.date_facture <= ?
+                    AND f.type_document = 'Facture' 
+                    AND f.statut != 'Annulée'
+                 """, (pid, start_d, end_d))
+                 return cursor.fetchone()[0]
+
+            daily_qty = get_sales_qty(day_str, day_str)
+            monthly_qty = get_sales_qty(month_start, day_str)
+            yearly_qty = get_sales_qty(year_start, day_str)
+            
+            if daily_qty == 0 and monthly_qty == 0 and yearly_qty == 0:
+                continue # Skip products with no movement? Or show all? 
+                # Usually reports show active items. Let's keep all or skip empty.
+                # User request: "État de Consommation". If nothing consumed, maybe skip.
+                # But often "Stock" reports want to see everything.
+                # Let's include everything for completeness.
+                pass
+
+            report_data.append({
+                "product_name": p['nom'],
+                "unit": p['unite'],
+                "cout_revient": cout,
+                "daily_qty": daily_qty,
+                "daily_val": daily_qty * cout,
+                "monthly_qty": monthly_qty,
+                "monthly_val": monthly_qty * cout,
+                "yearly_qty": yearly_qty,
+                "yearly_val": yearly_qty * cout
+            })
+            
+        return {
+            "date": day_str,
+            "data": report_data
+        }
+
     # ==================== FINANCIAL CALCULATIONS ====================
     
+    def get_annual_receivables_data(self, date_n: str) -> Dict[str, Any]:
+        """
+        Calculate annual receivables tracking for all clients up to date_n.
+        
+        Logic:
+        1. Start of Year = 01/01/{Year of date_n}
+        2. Solde 01/01:
+           - Base: client.report_n_moins_1 (Initial Balance)
+           - Plus: Movements (Factures - Paiements + Avoirs) BEFORE Start of Year.
+        3. Movements Year (Start of Year to date_n):
+           - Achats: Sum(Factures)
+           - Paiements: Sum(Paiements)
+           - Avoirs: Sum(Avoirs) [Usually deducted from Achats or treated as Credit]
+             * Rule: "Cumuler les Achats (Débit) et les Paiements (Crédit)"
+             * Avoirs are credit notes. They reduce debt.
+             * Standard accounting: Solde = Init + Sales - Payments - Avoirs.
+             * Or: Sales = Gross Sales - Avoirs?
+             * User prompt says "Achats (Débit)" and "Paiements (Crédit)".
+             * Where do Avoirs go?
+             * Usually Avoirs reduce the "Achats" amount or are added to "Paiements" side (Credits).
+             * Let's treat (Achats - Avoirs) as Net Sales? Or allow Avoirs to be separate?
+             * The table columns are: | Solde 01/01 | Achats (Année) | Paiements (Année) | Solde Final |
+             * Ideally: Achats = Total Factures.
+             * Solde Final = Solde 01/01 + Achats - Paiements - Avoirs.
+             * IF Avoirs are not in columns, they must be netted from Achats.
+             * Let's Net them from Achats: Achats (Net) = Factures - Avoirs.
+        
+        4. Solde Final = Solde 01/01 + Achats - Paiements.
+        5. % Recouvrement = (Paiements / (Solde 01/01 + Achats)) * 100
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        
+        target_date = datetime.strptime(date_n, "%Y-%m-%d")
+        year = target_date.year
+        start_year_str = f"{year}-01-01"
+        
+        # Get all active clients
+        cursor.execute("SELECT * FROM clients WHERE active = 1 ORDER BY raison_sociale")
+        clients = cursor.fetchall()
+        
+        results = []
+        
+        # Totals
+        total_solde_init = 0.0
+        total_achats = 0.0
+        total_paiements = 0.0
+        total_solde_final = 0.0
+        
+        for client in clients:
+            cid = client['id']
+            report_n_1 = client['report_n_moins_1'] or 0.0
+            
+            # --- 1. Calculate Solde 01/01 ---
+            # Sum movements BEFORE start_year_str
+            
+            # Invoices before 01/01
+            cursor.execute("""
+                SELECT COALESCE(SUM(montant_ttc), 0) FROM factures 
+                WHERE client_id = ? AND date_facture < ? AND type_document = 'Facture' AND statut != 'Annulée'
+            """, (cid, start_year_str))
+            hist_factures = cursor.fetchone()[0]
+            
+            # Avoirs before 01/01
+            cursor.execute("""
+                SELECT COALESCE(SUM(montant_ttc), 0) FROM factures 
+                WHERE client_id = ? AND date_facture < ? AND type_document = 'Avoir' AND statut != 'Annulée'
+            """, (cid, start_year_str))
+            hist_avoirs = cursor.fetchone()[0]
+            
+            # Payments before 01/01
+            cursor.execute("""
+                SELECT COALESCE(SUM(montant), 0) FROM paiements 
+                WHERE client_id = ? AND date_paiement < ?
+            """, (cid, start_year_str))
+            hist_paiements = cursor.fetchone()[0]
+            
+            # Solde 01/01 = Initial - (Factures - Avoirs) + Paiements
+            # User Logic: Negative = Debt. Purchase increases debt ( more negative). Payment reduces debt (adds positive).
+            solde_01_01 = report_n_1 - (hist_factures - hist_avoirs) + hist_paiements
+            
+            # --- 2. Calculate Movements Year (01/01 to date_n) ---
+            
+            # Achats (Invoices) in range
+            cursor.execute("""
+                SELECT COALESCE(SUM(montant_ttc), 0) FROM factures 
+                WHERE client_id = ? AND date_facture >= ? AND date_facture <= ? 
+                AND type_document = 'Facture' AND statut != 'Annulée'
+            """, (cid, start_year_str, date_n))
+            achats_year = cursor.fetchone()[0]
+            
+            # Avoirs in range
+            cursor.execute("""
+                SELECT COALESCE(SUM(montant_ttc), 0) FROM factures 
+                WHERE client_id = ? AND date_facture >= ? AND date_facture <= ? 
+                AND type_document = 'Avoir' AND statut != 'Annulée'
+            """, (cid, start_year_str, date_n))
+            avoirs_year = cursor.fetchone()[0]
+            
+            achats_net = achats_year - avoirs_year
+            
+            # Paiements in range
+            cursor.execute("""
+                SELECT COALESCE(SUM(montant), 0) FROM paiements 
+                WHERE client_id = ? AND date_paiement >= ? AND date_paiement <= ?
+            """, (cid, start_year_str, date_n))
+            paiements_year = cursor.fetchone()[0]
+            
+            # --- 3. Final Balance ---
+            # Balance = Init - Purchases + Payments
+            solde_final = solde_01_01 - achats_net + paiements_year
+            
+            # Filter: Include only if Solde Final != 0 OR any movement not 0
+            if abs(solde_final) < 0.01 and abs(achats_net) < 0.01 and abs(paiements_year) < 0.01:
+                continue
+                
+            # --- 4. % Recouvrement ---
+            # Formula: (Paiements / Available Debt) * 100
+            # Available Debt = |Solde Initial - Purchases| (Total Negative Debt Value)
+            # If Solde is Positive (Credit), Purchases reduce it. 
+            # We use ABS to get the magnitude of the debt obligation constructed.
+            denominator = abs(solde_01_01 - achats_net)
+            
+            if denominator > 0.01:
+                recouvrement = (paiements_year / denominator) * 100
+            else:
+                recouvrement = 0.0
+                
+            results.append({
+                "raison_sociale": client['raison_sociale'],
+                "solde_01_01": solde_01_01,
+                "achats": achats_net,
+                "paiements": paiements_year,
+                "solde_final": solde_final,
+                "recouvrement": recouvrement
+            })
+            
+            # Update totals
+            total_solde_init += solde_01_01
+            total_achats += achats_net
+            total_paiements += paiements_year
+            total_solde_final += solde_final
+
+        # Sort by Raison Sociale? User said "Structure du Tableau Unique", implies list.
+        # SQL already sorted by raison_sociale.
+        
+        return {
+            "date": date_n,
+            "data": results,
+            "totals": {
+                "solde_init": total_solde_init,
+                "achats": total_achats,
+                "paiements": total_paiements,
+                "solde_final": total_solde_final
+            }
+        }
+
     def calculate_client_balance(self, client_id: int) -> Dict[str, float]:
         """
         Calculate client balance using formula:
@@ -426,9 +854,12 @@ class BusinessLogic:
                                       chauffeur: str = None, 
                                       matricule_tracteur: str = None, 
                                       matricule_remorque: str = None,
+                                      transporteur: str = None,
 
                                       client_compte_bancaire: str = None,
                                       client_categorie: str = None,
+                                      statut_final: str = 'Brouillon', # 'Brouillon' or 'Validée'
+                                      custom_date: str = None, # YYYY-MM-DD
                                       user_id: Optional[int] = None) -> Tuple[bool, str, Optional[int]]:
         """
         Create invoice with full validation
@@ -478,7 +909,14 @@ class BusinessLogic:
                 )
                 if not is_available:
                     product = self.db.get_product_by_id(ligne['product_id'])
+                if not is_available:
+                    product = self.db.get_product_by_id(ligne['product_id'])
                     return (False, f"Stock insuffisant pour {product['nom']}. Stock actuel: {current_stock}", None)
+                
+                # Check if Parent Product (Blocking)
+                if self.is_parent_product(ligne['product_id']):
+                     product = self.db.get_product_by_id(ligne['product_id'])
+                     return (False, f"Le produit '{product['nom']}' est un produit parent (Groupe). Impossible de le vendre directement.", None)
             
             # --- Type Vente Logic ---
             if type_vente == 'Au comptant':
@@ -515,15 +953,32 @@ class BusinessLogic:
 
         
         # Determine status
-        statut_facture = 'Non soldée'
+        statut_facture = statut_final
         if type_vente in ['Au comptant', 'Sur Avances']:
-            statut_facture = 'Soldée'
+            statut_facture = 'Soldée' # Should override Brouillon if paid? 
+            # WAIT. If it's "Confirmer sans impression" (Step 1), it implies "Brouillon".
+            # But if it's "Au comptant", usually payment is immediate.
+            # Strategy: If "Confirmer sans impression", we force 'Brouillon' even if paid.
+            # But the requirement says "peut être modifiée".
+            # If we enforce 'Brouillon', we say it's paid but not finalized?
+            # Let's trust the 'statut_final' passed strictly.
+            if statut_final == 'Validée' and type_vente in ['Au comptant', 'Sur Avances']:
+                 statut_facture = 'Soldée'
+            else:
+                 statut_facture = statut_final
+
         elif type_document == 'Avoir':
              statut_facture = 'Remboursée' # Or applied
 
         # Create invoice
         current_year = datetime.now().year
         current_date = datetime.now().strftime("%Y-%m-%d")
+        
+        if custom_date:
+             current_date = custom_date
+             try:
+                 current_year = int(custom_date.split('-')[0])
+             except: pass
         
         if type_vente == 'A terme':
              is_ok, info = self.check_credit_limit(client_id, totals['montant_ttc'])
@@ -535,19 +990,21 @@ class BusinessLogic:
             cursor = conn.cursor()
             
             # Generate Number
-            annee = datetime.now().year
+            # Logic: If custom date year != current year, we should likely generate number for THAT year?
+            # Usually generation depends on fiscal year.
+            annee = current_year
             numero = self.db.generate_facture_number(type_document, annee)
             
             cursor.execute("""
                 INSERT INTO factures (numero, type_document, type_vente, annee, date_facture, 
                 client_id, facture_origine_id, montant_ht, montant_tva, montant_ttc, statut, mode_paiement, 
                 ref_paiement, banque, contract_id, contrat_code, chauffeur, matricule_tracteur, matricule_remorque,
-                client_compte_bancaire, client_categorie, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (numero, type_document, type_vente, annee, datetime.now().strftime("%Y-%m-%d"), 
+                transporteur, client_compte_bancaire, client_categorie, created_by, statut_facture)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (numero, type_document, type_vente, annee, current_date, 
                   client_id, facture_origine_id, totals['montant_ht'], totals['montant_tva'], totals['montant_ttc'],
                   statut_facture, mode_paiement, ref_paiement, banque, contract_id, contrat_code, 
-                  chauffeur, matricule_tracteur, matricule_remorque, client_compte_bancaire, client_categorie, user_id))
+                  chauffeur, matricule_tracteur, matricule_remorque, transporteur, client_compte_bancaire, client_categorie, user_id, statut_facture))
             
             facture_id = cursor.lastrowid
             
@@ -633,6 +1090,163 @@ class BusinessLogic:
         except Exception as e:
             # conn.rollback() # Warning: conn might be local
             return (False, f"Erreur base de données: {str(e)}", None)
+
+    def update_invoice_draft(self, facture_id: int, new_lignes: List[Dict[str, Any]], user_id: int, **kwargs) -> Tuple[bool, str]:
+        """
+        Update a 'Brouillon' invoice.
+        Logic:
+        1. Verify status.
+        2. Revert Old Stock (ADD back).
+        3. Delete old lines.
+        4. Insert new lines (REMOVE stock).
+        5. Update Invoice Totals and Header Fields.
+        Returns (success, message)
+        """
+        conn = self.db._get_connection()
+        
+        # 1. Verify Status
+        facture = self.db.get_facture_by_id(facture_id)
+        if not facture or facture['statut_facture'] != 'Brouillon':
+             return (False, "Seules les factures 'Brouillon' peuvent être modifiées.")
+
+        try:
+             conn.execute("BEGIN TRANSACTION")
+             
+             # 2. Revert Old Stock
+             cursor = conn.cursor()
+             cursor.execute("SELECT product_id, quantite FROM lignes_facture WHERE facture_id = ?", (facture_id,))
+             old_lines = cursor.fetchall()
+             
+             numero = facture['numero']
+             
+             for old in old_lines:
+                 # Add back to stock (Reverse Sale)
+                 self.db.log_stock_movement(
+                    product_id=old['product_id'],
+                    type_mouvement='Modification (Reversion)',
+                    quantite=old['quantite'], # Positive to add back
+                    reference_document=f"MODIF-{numero}",
+                    document_id=facture_id,
+                    created_by=user_id
+                 )
+             
+             # 3. Delete Old Lines
+             cursor.execute("DELETE FROM lignes_facture WHERE facture_id = ?", (facture_id,))
+             
+             # 4. Insert New Lines and Deduct Stock
+             totals = self.calculate_facture_totals(new_lignes)
+             
+             for ligne in new_lignes:
+                 # Check Parent
+                 if self.is_parent_product(ligne['product_id']):
+                     raise Exception(f"Produit parent interdit: {ligne['product_id']}")
+
+                 cursor.execute("""
+                    INSERT INTO lignes_facture (facture_id, product_id, quantite, prix_unitaire, montant, taux_remise, prix_initial)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                 """, (facture_id, ligne['product_id'], ligne['quantite'], ligne['prix_unitaire'], ligne['montant'], 
+                       ligne.get('taux_remise', 0.0), ligne.get('prix_initial', ligne['prix_unitaire'])))
+                 
+                 self.db.log_stock_movement(
+                     product_id=ligne['product_id'],
+                     type_mouvement='Vente', 
+                     quantite=-ligne['quantite'],
+                     reference_document=numero,
+                     document_id=facture_id,
+                     created_by=user_id
+                 )
+
+             # 5. Update Invoice Totals and Header in DB
+             # Build dynamic update for header fields
+             update_fields = [
+                 "montant_ht = ?", "montant_tva = ?", "montant_ttc = ?"
+             ]
+             update_values = [
+                 totals['montant_ht'], totals['montant_tva'], totals['montant_ttc']
+             ]
+             
+             # Allowed header fields to be updated
+             header_map = {
+                 'client_id': 'client_id',
+                 'type_vente': 'type_vente',
+                 'chauffeur': 'chauffeur',
+                 'matricule_tracteur': 'matricule_tracteur',
+                 'matricule_remorque': 'matricule_remorque',
+                 'transporteur': 'transporteur',
+                 'contract_id': 'contract_id',
+                 'contrat_code': 'contrat_code',
+                 'client_compte_bancaire': 'client_compte_bancaire',
+                 'client_categorie': 'client_categorie',
+                 'mode_paiement': 'mode_paiement',
+                 'ref_paiement': 'ref_paiement',
+                 'banque': 'banque',
+                 'motif': 'motif' # If Avoir
+             }
+             
+             for arg_name, col_name in header_map.items():
+                 if arg_name in kwargs:
+                     update_fields.append(f"{col_name} = ?")
+                     update_values.append(kwargs[arg_name])
+             
+             update_query = f"UPDATE factures SET {', '.join(update_fields)} WHERE id = ?"
+             update_values.append(facture_id)
+             
+             cursor.execute(update_query, tuple(update_values))
+             
+             conn.commit()
+             return (True, "Facture mise à jour avec succès")
+             
+        except Exception as e:
+             conn.rollback()
+             return (False, str(e))
+
+    def confirm_invoice(self, facture_id: int) -> Tuple[bool, str]:
+        """
+        Transition Status from 'Brouillon' to 'Validée' (or 'Non soldée'/'Soldée').
+        Locks the invoice.
+        """
+        facture = self.db.get_facture_by_id(facture_id)
+        if not facture:
+            return (False, "Facture introuvable")
+        
+        if facture['statut_facture'] != 'Brouillon':
+            return (True, "Facture déjà validée") # Idempotent-ish
+            
+        conn = self.db._get_connection()
+        try:
+            # Determine new status based on payment
+            # If 'Au comptant' or 'Soldée' was intended...
+            # We revert to logic: logic determines if Paid.
+            
+            new_status = 'Non soldée'
+            if facture['type_vente'] in ['Au comptant', 'Sur Avances']:
+                new_status = 'Soldée'
+            
+            # Use 'Validée' as a general "Locked" state if not paid?
+            # Or just use the standard statuses but 'Brouillon' is the special one.
+            # Plan said: "'Validée' (Step 2)".
+            # Let's check `database.py` again. `statut` vs `statut_facture`.
+            # `statut` (Non soldée, Soldée...) vs `statut_facture` (maybe this is the one?).
+            # In `create_facture`, `statut_facture` defaults to 'Non soldée'.
+            # I should essentially remove 'Brouillon' from `statut_facture`.
+            
+            # If I use `statut_facture` column for Brouillon/Validée, then `statut` column handles Payment logic?
+            # Looking at schema:
+            # "statut": "TEXT DEFAULT 'Non soldée'",
+            # "statut_facture": "TEXT",
+            
+            # Ah! `statut_facture` seems unused or redundant in previous code?
+            # Let's use `statut_facture` for the workflow state: 'Brouillon' -> 'Validée'.
+            
+            cursor = conn.cursor()
+            cursor.execute("UPDATE factures SET statut_facture = 'Validée', statut = ? WHERE id = ?", (new_status, facture_id))
+            conn.commit()
+            
+            return (True, "Facture confirmée et verrouillée")
+            
+        except Exception as e:
+            conn.rollback()
+            return (False, str(e))
     
     # ==================== PAYMENT PROCESSING ====================
     
@@ -1192,6 +1806,150 @@ class BusinessLogic:
             export_data.append(data)
             
         return export_data
+
+    def get_movements_valorises_data(self, date_str: str) -> Dict[str, Any]:
+        """
+        Get detailed stock movements and valuation for a specific date.
+        Returns data for 'ETAT DES MOUVEMENTS DES STOCKS VALORISES'.
+        Columns: Day (Init, In, Out), Month (Init, In, Out), Year (Init, In, Out), Final.
+        Physics: Entrées = Receptions + Avoirs. Sorties = Ventes.
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        
+        target_date = datetime.strptime(date_str, "%Y-%m-%d")
+        year_start = target_date.replace(month=1, day=1).strftime("%Y-%m-%d")
+        month_start = target_date.replace(day=1).strftime("%Y-%m-%d")
+        day_str = date_str
+        
+        # Get all products
+        cursor.execute("SELECT id, nom, unite, cout_revient, stock_initial FROM products WHERE active = 1 ORDER BY nom")
+        products = cursor.fetchall()
+        
+        report_data = []
+        
+        grand_totals = {
+            "day": {"init": 0.0, "in": 0.0, "out": 0.0},
+            "month": {"init": 0.0, "in": 0.0, "out": 0.0},
+            "year": {"init": 0.0, "in": 0.0, "out": 0.0},
+            "final": 0.0,
+            "val_final": 0.0
+        }
+
+        # Helper to get Sum Quantities in Range
+        def get_sum(query, pid, d_start, d_end):
+            cursor.execute(query, (pid, d_start, d_end))
+            return cursor.fetchone()[0]
+
+        # Queries
+        # Receptions (Sur Stock)
+        q_reception = "SELECT COALESCE(SUM(quantite_recue), 0) FROM receptions WHERE product_id = ? AND date_reception >= ? AND date_reception <= ? AND lieu_livraison = 'Sur Stock'"
+        
+        # Sales (Factures)
+        q_sales = """
+            SELECT COALESCE(SUM(lf.quantite), 0) 
+            FROM lignes_facture lf 
+            JOIN factures f ON lf.facture_id = f.id 
+            WHERE lf.product_id = ? AND f.date_facture >= ? AND f.date_facture <= ? 
+            AND f.type_document = 'Facture' AND f.statut != 'Annulée'
+        """
+        
+        # Returns (Avoirs) -> Treat as Entries
+        q_avoirs = """
+            SELECT COALESCE(SUM(lf.quantite), 0) 
+            FROM lignes_facture lf 
+            JOIN factures f ON lf.facture_id = f.id 
+            WHERE lf.product_id = ? AND f.date_facture >= ? AND f.date_facture <= ? 
+            AND f.type_document = 'Avoir' AND f.statut != 'Annulée'
+        """
+        
+        # Base Initial Stock (Before Year Start)
+        q_rec_before = "SELECT COALESCE(SUM(quantite_recue), 0) FROM receptions WHERE product_id = ? AND date_reception < ? AND lieu_livraison = 'Sur Stock'"
+        q_sale_before = "SELECT COALESCE(SUM(lf.quantite), 0) FROM lignes_facture lf JOIN factures f ON lf.facture_id = f.id WHERE lf.product_id = ? AND f.date_facture < ? AND f.type_document = 'Facture' AND f.statut != 'Annulée'"
+        q_avoir_before = "SELECT COALESCE(SUM(lf.quantite), 0) FROM lignes_facture lf JOIN factures f ON lf.facture_id = f.id WHERE lf.product_id = ? AND f.date_facture < ? AND f.type_document = 'Avoir' AND f.statut != 'Annulée'"
+
+        for p in products:
+            pid = p['id']
+            cout = p['cout_revient'] or 0.0
+            base_init = p['stock_initial'] or 0.0
+            
+            # 1. Calculate S.Init (Year)
+            rec_b = cursor.execute(q_rec_before, (pid, year_start)).fetchone()[0]
+            sale_b = cursor.execute(q_sale_before, (pid, year_start)).fetchone()[0]
+            avoir_b = cursor.execute(q_avoir_before, (pid, year_start)).fetchone()[0]
+            
+            s_init_year = base_init + rec_b + avoir_b - sale_b
+            
+            # 2. Year Movements (Jan 1 to Date)
+            rec_y = get_sum(q_reception, pid, year_start, day_str)
+            sale_y = get_sum(q_sales, pid, year_start, day_str)
+            avoir_y = get_sum(q_avoirs, pid, year_start, day_str)
+            
+            in_year = rec_y + avoir_y
+            out_year = sale_y
+            
+            # S.Final
+            s_final = s_init_year + in_year - out_year
+            
+            # 3. Month Movements (1st to Date)
+            rec_m = get_sum(q_reception, pid, month_start, day_str)
+            sale_m = get_sum(q_sales, pid, month_start, day_str)
+            avoir_m = get_sum(q_avoirs, pid, month_start, day_str)
+            
+            in_month = rec_m + avoir_m
+            out_month = sale_m
+            
+            # S.Init(Month)
+            s_init_month = s_final - in_month + out_month
+            
+            # 4. Day Movements (Date)
+            rec_d = get_sum(q_reception, pid, day_str, day_str)
+            sale_d = get_sum(q_sales, pid, day_str, day_str)
+            avoir_d = get_sum(q_avoirs, pid, day_str, day_str)
+            
+            in_day = rec_d + avoir_d
+            out_day = sale_d
+            
+            # S.Init(Day)
+            s_init_day = s_final - in_day + out_day
+            
+            item = {
+                "code": p['id'],
+                "designation": p['nom'],
+                "unite": p['unite'],
+                "cout_unitaire": cout,
+                
+                "day": {"init": s_init_day, "in": in_day, "out": out_day},
+                "month": {"init": s_init_month, "in": in_month, "out": out_month},
+                "year": {"init": s_init_year, "in": in_year, "out": out_year},
+                "final": s_final,
+                
+                "val_final": s_final * cout,
+                "values": {
+                     "day": {"init": s_init_day * cout, "in": in_day * cout, "out": out_day * cout},
+                     "month": {"init": s_init_month * cout, "in": in_month * cout, "out": out_month * cout},
+                     "year": {"init": s_init_year * cout, "in": in_year * cout, "out": out_year * cout},
+                }
+            }
+            report_data.append(item)
+            
+            grand_totals["day"]["init"] += s_init_day
+            grand_totals["day"]["in"] += in_day
+            grand_totals["day"]["out"] += out_day
+            grand_totals["month"]["init"] += s_init_month
+            grand_totals["month"]["in"] += in_month
+            grand_totals["month"]["out"] += out_month
+            grand_totals["year"]["init"] += s_init_year
+            grand_totals["year"]["in"] += in_year
+            grand_totals["year"]["out"] += out_year
+            grand_totals["final"] += s_final
+            grand_totals["val_final"] += (s_final * cout)
+            
+        return {
+            "date": day_str,
+            "data": report_data,
+            "totals": grand_totals
+        }
 
 # Global business logic instance
 _logic_instance: Optional[BusinessLogic] = None

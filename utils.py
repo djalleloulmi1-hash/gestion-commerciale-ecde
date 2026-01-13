@@ -4,6 +4,7 @@ Handles PDF generation, Excel exports, currency conversion, and backups
 """
 
 import os
+import sys
 import shutil
 from datetime import datetime
 from typing import List, Dict, Any
@@ -98,23 +99,70 @@ def nombre_en_lettres(nombre: float) -> str:
 
 # ==================== PDF GENERATION ====================
 
+def resource_path(relative_path: str) -> str:
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
+
 def check_logo_exists() -> str:
     "Check if logo exists, prioritizing logo_entete.png, then logo.png"
-    logo_paths = ["logo_entete.png", "logo.png", "logo_gica.png"]
-    for path in logo_paths:
+    # List of possible logo filenames
+    logo_names = ["logo_entete.png", "logo.png", "logo_gica.png"]
+    
+    for name in logo_names:
+        # Check normal path (dev) AND resource path (exe)
+        # In dev, resource_path returns the absolute path too, so it covers both.
+        path = resource_path(name)
         if os.path.exists(path):
             return path
+            
+        # Fallback to checking pure relative path just in case
+        if os.path.exists(name):
+             return name
+             
     return None
 
 
+def format_number(value: float, decimals: int = 2) -> str:
+    """Format a number with thousand separators (space) and fixed decimals."""
+    try:
+        if value is None: value = 0.0
+        s = f"{float(value):,.{decimals}f}"
+        return s.replace(",", " ")
+    except:
+        return f"{0:.{decimals}f}"
+
+def format_currency(value: float) -> str:
+    """Format currency (2 decimals, space separator)"""
+    return format_number(value, 2)
+
+def parse_currency(value_str: Any) -> float:
+    """Parse string with spaces to float. Handles '1 234,50' -> 1234.50"""
+    if not value_str: return 0.0
+    if isinstance(value_str, (int, float)): return float(value_str)
+    
+    try:
+        # Remove thousands separator (space)
+        clean = str(value_str).replace(" ", "")
+        # Replace decimal comma with dot
+        clean = clean.replace(",", ".")
+        return float(clean)
+    except:
+        return 0.0
+
 def format_quantity(value: float, unit: str) -> str:
     """Format quantity based on unit. 
-    'Tonne' -> 3 decimals (e.g., 1.500)
+    'Tonne' -> 3 decimals (e.g., 1 500.000)
     Others -> 2 decimals (e.g., 5.00)
     """
-    if str(unit).lower() == 'tonne':
-        return f"{value:.3f}"
-    return f"{value:.2f}"
+    decimals = 3 if str(unit).lower() == 'tonne' else 2
+    return format_number(value, decimals)
 
 
 def generate_invoice_pdf(facture_data: Dict[str, Any], filename: str):
