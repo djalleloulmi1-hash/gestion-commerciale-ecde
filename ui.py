@@ -53,6 +53,47 @@ SIDEBAR_COLOR = "#263238"
 TEXT_COLOR = "#eceff1" # Light Blue Grey
 
 
+
+class ToolTip(object):
+    def __init__(self, widget):
+        self.widget = widget
+        self.tipwindow = None
+        self.id = None
+        self.x = self.y = 0
+
+    def showtip(self, text):
+        "Display text in tooltip window"
+        self.text = text
+        if self.tipwindow or not self.text:
+            return
+        x, y, cx, cy = self.widget.bbox("insert")
+        x = x + self.widget.winfo_rootx() + 27
+        y = y + cy + self.widget.winfo_rooty() +27
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(1)
+        tw.wm_geometry("+%d+%d" % (x, y))
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                      background="#ffffe0", relief=tk.SOLID, borderwidth=1,
+                      font=("tahoma", "8", "normal"))
+        label.pack(ipadx=1)
+
+    def hidetip(self):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            tw.destroy()
+
+def create_tooltip(widget, text):
+    toolTip = ToolTip(widget)
+    def enter(event):
+        toolTip.showtip(text)
+    def leave(event):
+        toolTip.hidetip()
+    widget.bind('<FocusIn>', enter)
+    widget.bind('<FocusOut>', leave)
+    widget.bind('<Enter>', enter)
+    widget.bind('<Leave>', leave)
+
 class MainApplication:
     """Main application window"""
     
@@ -816,16 +857,19 @@ class ProductsFrame(ttk.Frame):
         table_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
         vsb = ttk.Scrollbar(table_frame, orient="vertical")
+        hsb = ttk.Scrollbar(table_frame, orient="horizontal")
         
         columns = ("Code", "Désignation", "Unité", "Prix HT", "Stock", "Coût", "TVA", "Réf. Stock")
         self.tree = ttk.Treeview(
             table_frame, 
             columns=columns, 
             show="headings",
-            yscrollcommand=vsb.set
+            yscrollcommand=vsb.set,
+            xscrollcommand=hsb.set
         )
         
         vsb.config(command=self.tree.yview)
+        hsb.config(command=self.tree.xview)
         
         for col in columns:
             self.tree.heading(col, text=col)
@@ -835,6 +879,7 @@ class ProductsFrame(ttk.Frame):
             self.tree.column(col, width=width)
         
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         # Action Buttons Frame
@@ -940,6 +985,8 @@ class ReceptionsFrame(ttk.Frame):
     def __init__(self, parent, app):
         super().__init__(parent)
         self.app = app
+        self.all_receptions = []
+        self.filters = {}
         self._build()
     
     def _build(self):
@@ -990,34 +1037,49 @@ class ReceptionsFrame(ttk.Frame):
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
         
+        # --- Filter Bar ---
+        self.create_filter_bar()
+        
         # Table
         table_frame = tk.Frame(self, bg=BG_COLOR)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
         vsb = ttk.Scrollbar(table_frame, orient="vertical")
+        hsb = ttk.Scrollbar(table_frame, orient="horizontal")
         
         columns = ("Numéro", "Date", "Produit", "Chauffeur", "Lieu", "Qté Reçue", "Écart")
         self.tree = ttk.Treeview(
             table_frame, 
             columns=columns, 
             show="headings",
-            yscrollcommand=vsb.set
+            yscrollcommand=vsb.set,
+            xscrollcommand=hsb.set
         )
         
         vsb.config(command=self.tree.yview)
+        hsb.config(command=self.tree.xview)
         
         # Helper for auto-resize (Primitive version for Tkinter)
-        total_width = 1100 # Approx available width
-        col_width = int(total_width / len(columns))
+        # Define specific column widths
+        col_widths = {
+            "Numéro": 120,
+            "Date": 100,
+            "Produit": 350,   # Give more space to product name
+            "Chauffeur": 150,
+            "Lieu": 100,
+            "Qté Reçue": 100,
+            "Écart": 80
+        }
         
         for col in columns:
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=col_width)
+            # Use defined width or fallback to 100
+            width = col_widths.get(col, 100)
+            self.tree.column(col, width=width, anchor=tk.W if col in ["Produit", "Chauffeur"] else tk.CENTER)
         
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        self.load_data()
         
         # Right-click menu
         self.menu = tk.Menu(self.tree, tearoff=0)
@@ -1025,24 +1087,87 @@ class ReceptionsFrame(ttk.Frame):
         self.menu.add_command(label="Générer PDF", command=self.generate_pdf)
         self.tree.bind("<Button-3>", self.show_context_menu)
         self.tree.tag_configure('evenrow', background='#546e7a')
+        self.tree.tag_configure('ecart_row', foreground='#d32f2f', font=('Arial', 10, 'bold')) # Red for anomalies
         self.load_data()
+
+    def create_filter_bar(self):
+        filter_frame = tk.LabelFrame(self, text="Filtres", bg=BG_COLOR, fg=TEXT_COLOR, padx=10, pady=5)
+        filter_frame.pack(fill=tk.X, padx=20, pady=(0, 5))
+        
+        # Helper widgets
+        def add_filter(parent, label, key, width=15):
+            frame = tk.Frame(parent, bg=BG_COLOR)
+            frame.pack(side=tk.LEFT, padx=5)
+            tk.Label(frame, text=label, bg=BG_COLOR, fg="white", font=("Arial", 9)).pack(anchor="w")
+            widget = tk.Entry(frame, bg="#455a64", fg="white", insertbackground="white", width=width)
+            widget.bind("<KeyRelease>", lambda e: self.apply_filters())
+            widget.pack()
+            self.filters[key] = widget
+            
+        add_filter(filter_frame, "Numéro", "numero", width=12)
+        add_filter(filter_frame, "Date", "date", width=12)
+        add_filter(filter_frame, "Produit", "produit", width=20)
+        add_filter(filter_frame, "Chauffeur", "chauffeur", width=15)
+        add_filter(filter_frame, "Lieu", "lieu", width=12)
+        
+        # Clear button
+        tk.Button(filter_frame, text="Effacer", command=self.clear_filters, bg="#757575", fg="white", font=("Arial", 8)).pack(side=tk.LEFT, padx=15, pady=5)
+
+    def clear_filters(self):
+        for widget in self.filters.values():
+            widget.delete(0, tk.END)
+        self.apply_filters()
         
     def load_data(self):
+        # Fetch all receptions
+        self.all_receptions = self.app.db.get_all_receptions()
+        self.apply_filters()
+
+    def apply_filters(self):
+        # Get filter values
+        f_num = self.filters['numero'].get().lower()
+        f_date = self.filters['date'].get()
+        f_prod = self.filters['produit'].get().lower()
+        f_chauf = self.filters['chauffeur'].get().lower()
+        f_lieu = self.filters['lieu'].get().lower()
+        
         for item in self.tree.get_children():
             self.tree.delete(item)
             
-        receptions = self.app.db.get_all_receptions()
-        for idx, r in enumerate(receptions):
-            tag = 'evenrow' if idx % 2 == 0 else ''
+        for idx, r in enumerate(self.all_receptions):
+            # Format date for check
+            date_display = r['date_reception']
+            if not date_display and r.get('created_at'):
+                date_display = r['created_at']
+            if date_display and len(date_display) > 10:
+                date_display = date_display[:10]
+            
+            # Apply filters
+            if f_num and f_num not in r['numero'].lower(): continue
+            if f_date and f_date not in date_display: continue
+            if f_prod and f_prod not in r['product_nom'].lower(): continue
+            if f_chauf and f_chauf not in r['chauffeur'].lower(): continue
+            if f_lieu and f_lieu not in r['lieu_livraison'].lower(): continue
+            
+            tags = []
+            if len(self.tree.get_children()) % 2 == 0:
+                tags.append('evenrow')
+            
+            # Check for Ecart
+            try:
+                if abs(float(r['ecart'])) > 0.001:
+                    tags.append('ecart_row')
+            except: pass
+
             self.tree.insert("", tk.END, iid=r['id'], values=(
                 r['numero'],
-                r['date_reception'],
+                date_display,
                 r['product_nom'],
                 r['chauffeur'],
                 r['lieu_livraison'],
                 format_quantity(r['quantite_recue'], r.get('unite', '')),
                 format_quantity(r['ecart'], r.get('unite', ''))
-            ), tags=(tag,))
+            ), tags=tuple(tags))
     
     def add_reception(self):
         ReceptionDialog(self.app.root, self.app.user['id'], callback=self.load_data)
@@ -1119,6 +1244,8 @@ class InvoicesFrame(ttk.Frame):
     def __init__(self, parent, app):
         super().__init__(parent)
         self.app = app
+        self.all_invoices = []
+        self.filters = {}
         self._build()
     
     def _build(self):
@@ -1197,33 +1324,51 @@ class InvoicesFrame(ttk.Frame):
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
         
+        # --- Filter Bar ---
+        self.create_filter_bar()
+        
         # Table
         table_frame = tk.Frame(self, bg=BG_COLOR)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
         vsb = ttk.Scrollbar(table_frame, orient="vertical")
+        hsb = ttk.Scrollbar(table_frame, orient="horizontal")
         
         columns = ("Numéro", "Type", "Réf. Liée", "Date", "Client", "Montant HT", "TVA", "Montant TTC", "Etat Paiement")
         self.tree = ttk.Treeview(
             table_frame, 
             columns=columns, 
             show="headings",
-            yscrollcommand=vsb.set
+            yscrollcommand=vsb.set,
+            xscrollcommand=hsb.set
         )
         
         vsb.config(command=self.tree.yview)
+        hsb.config(command=self.tree.xview)
         
         for col in columns:
             self.tree.heading(col, text=col)
-            width = 100
-            if col == "Client": width = 150
-            if col == "Réf. Liée": width = 120
-            self.tree.column(col, width=width)
+        # Define specific column widths
+        col_widths = {
+            "Numéro": 120,
+            "Type": 100,
+            "Réf. Liée": 120,
+            "Date": 100,
+            "Client": 250, # More space for client name
+            "Montant HT": 100,
+            "TVA": 100,
+            "Montant TTC": 100,
+            "Etat Paiement": 100
+        }
+        
+        for col in columns:
+            self.tree.heading(col, text=col)
+            width = col_widths.get(col, 100)
+            self.tree.column(col, width=width, anchor=tk.W if col == "Client" else tk.CENTER)
         
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        self.load_data()
         
         # Right-click menu
         self.menu = tk.Menu(self.tree, tearoff=0)
@@ -1232,17 +1377,78 @@ class InvoicesFrame(ttk.Frame):
 
         self.tree.tag_configure('evenrow', background='#546e7a')
         self.tree.tag_configure('avoir_row', foreground='#ff5252') # Dark Red/Orange for dark theme visibility
+        self.tree.tag_configure('annulee', foreground='#ff9800', font=('Arial', 9, 'bold')) # Orange Bold for Cancelled
         self.load_data()
+
+    def create_filter_bar(self):
+        filter_frame = tk.LabelFrame(self, text="Filtres", bg=BG_COLOR, fg=TEXT_COLOR, padx=10, pady=5)
+        filter_frame.pack(fill=tk.X, padx=20, pady=(0, 5))
+        
+        # Helper widgets
+        def add_filter(parent, label, key, width=15, is_combo=False, values=None):
+            frame = tk.Frame(parent, bg=BG_COLOR)
+            frame.pack(side=tk.LEFT, padx=5)
+            tk.Label(frame, text=label, bg=BG_COLOR, fg="white", font=("Arial", 9)).pack(anchor="w")
+            
+            if is_combo:
+                widget = ttk.Combobox(frame, values=values, width=width)
+                widget.bind("<<ComboboxSelected>>", lambda e: self.apply_filters())
+            else:
+                widget = tk.Entry(frame, bg="#455a64", fg="white", insertbackground="white", width=width)
+                widget.bind("<KeyRelease>", lambda e: self.apply_filters())
+                
+            widget.pack()
+            self.filters[key] = widget
+            
+        add_filter(filter_frame, "Numéro", "numero", width=12)
+        add_filter(filter_frame, "Type", "type", is_combo=True, values=["", "Facture", "Avoir"], width=10)
+        add_filter(filter_frame, "Date (AAAA-MM-JJ)", "date", width=12)
+        add_filter(filter_frame, "Client", "client", width=20)
+        add_filter(filter_frame, "Etat Paiement", "etat", is_combo=True, values=["", "Comptant", "À Terme", "Non soldée", "Payée"], width=12)
+        
+        # Clear button
+        tk.Button(filter_frame, text="Effacer", command=self.clear_filters, bg="#757575", fg="white", font=("Arial", 8)).pack(side=tk.LEFT, padx=15, pady=5)
+
+    def clear_filters(self):
+        for key, widget in self.filters.items():
+            if isinstance(widget, ttk.Combobox):
+                widget.set("")
+            else:
+                widget.delete(0, tk.END)
+        self.apply_filters()
     
     def load_data(self):
+        # Fetch all data once
+        self.all_invoices = self.app.db.get_all_factures()
+        self.apply_filters()
+
+    def apply_filters(self):
+        # Get filter values
+        f_num = self.filters['numero'].get().lower()
+        f_type = self.filters['type'].get()
+        f_date = self.filters['date'].get()
+        f_client = self.filters['client'].get().lower()
+        f_etat = self.filters['etat'].get()
+
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        # Sort by date descending (usually preferred)
-        factures = self.app.db.get_all_factures()
         # Sort manually if needed, but DB usually returns sorted or we trust insertion order
         
-        for idx, f in enumerate(factures):
+        for idx, f in enumerate(self.all_invoices):
+            # Apply filters
+            if f_num and f_num not in f['numero'].lower(): continue
+            if f_type and f['type_document'] != f_type: continue
+            if f_date and f_date not in f['date_facture']: continue
+            if f_client and f_client not in f['client_nom'].lower(): continue
+            
+            # Logic for payment status if needed (some fields might be calculated or string)
+            # In DB it is 'etat_paiement' usually
+            current_etat = f.get('etat_paiement', 'N/A')
+            if f_etat:
+                 # Fuzzy match or exact? Let's do partial for flexibility
+                 if f_etat.lower() not in str(current_etat).lower(): continue
+
             # Determine linked reference(s)
             linked_ref = ""
             if f.get('parent_ref'):
@@ -1254,9 +1460,41 @@ class InvoicesFrame(ttk.Frame):
             if idx % 2 == 0:
                 tags.append('evenrow')
             
-            # Highlight Avoirs AND Cancelled Invoices AND Invoices with Avoirs (Linked)
-            if f['type_document'] == 'Avoir' or f['statut'] == 'Annulée' or (f.get('child_refs') and f['child_refs'].strip()):
+            if idx % 2 == 0:
+                tags.append('evenrow')
+            
+            # Highlight Logic
+            # 1. Cancelled (Highest Priority)
+            if f.get('statut') == 'ANNULEE' or f.get('statut_facture') == 'Annulée':
+                tags.append('annulee')
+            # 2. Avoir
+            elif f['type_document'] == 'Avoir':
                 tags.append('avoir_row')
+            # 3. Linked to Avoir (e.g. Refunded)
+            elif f.get('child_refs') and f['child_refs'].strip():
+                tags.append('avoir_row')
+            
+            # Note: idx is from ALL list, but visually evens/odds might look weird if filtered.
+            # Ideally we recalculate evens/odds from filtered list index.
+            
+            # Better tags logic for visual striping on Filtered List
+            display_idx = len(self.tree.get_children())
+            display_tags = []
+            if display_idx % 2 == 0:
+                display_tags.append('evenrow')
+            
+            # Re-apply color tags
+            if f.get('statut') == 'ANNULEE' or f.get('statut_facture') == 'Annulée':
+                display_tags.append('annulee')
+            elif f['type_document'] == 'Avoir':
+                display_tags.append('avoir_row')
+            elif f.get('child_refs') and f['child_refs'].strip():
+                display_tags.append('avoir_row')
+
+            # Determine status text
+            status_text = f.get('etat_paiement', 'N/A')
+            if f.get('statut') == 'ANNULEE' or f.get('statut_facture') == 'Annulée':
+                status_text = "(ANNULEE)"
 
             self.tree.insert("", tk.END, iid=f['id'], values=(
                 f['numero'],
@@ -1264,12 +1502,11 @@ class InvoicesFrame(ttk.Frame):
                 linked_ref,
                 f['date_facture'],
                 f['client_nom'],
-
                 format_currency(f['montant_ht']),
                 format_currency(f['montant_tva']),
                 format_currency(f['montant_ttc']),
-                f.get('etat_paiement', 'N/A')
-            ), tags=tuple(tags))
+                status_text
+            ), tags=tuple(display_tags))
     
     def add_invoice(self, type_doc):
         # type_doc argument kept for compatibility but we mostly use for Facture now
@@ -1505,6 +1742,27 @@ class PaymentsFrame(ttk.Frame):
         
         tk.Button(
             btn_frame, 
+            text="Modifier", 
+            bg=SECONDARY_COLOR, 
+            fg="white",
+            font=("Arial", 10, "bold"),
+            command=self.modify_payment,
+            cursor="hand2"
+        ).pack(side=tk.LEFT, padx=5)
+
+        if self.app.user.get('role') == 'admin':
+            tk.Button(
+                btn_frame, 
+                text="Supprimer", 
+                bg="#d32f2f", 
+                fg="white",
+                font=("Arial", 10, "bold"),
+                command=self.delete_payment,
+                cursor="hand2"
+            ).pack(side=tk.LEFT, padx=5)
+
+        tk.Button(
+            btn_frame, 
             text="Créer Bordereau", 
             bg="#c62828", 
             fg="white",
@@ -1537,6 +1795,7 @@ class PaymentsFrame(ttk.Frame):
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         self.tree.tag_configure('evenrow', background='#546e7a')
+        self.tree.tag_configure('pending', foreground='#ff9800', font=('Arial', 10, 'bold')) # Orange for Pending
         self.load_data()
         
     def load_data(self):
@@ -1545,7 +1804,13 @@ class PaymentsFrame(ttk.Frame):
         
         paiements = self.app.db.get_all_paiements()
         for idx, p in enumerate(paiements):
-            tag = 'evenrow' if idx % 2 == 0 else ''
+            tags = []
+            if idx % 2 == 0:
+                tags.append('evenrow')
+            
+            if p['statut'] == 'En attente':
+                tags.append('pending')
+
             self.tree.insert("", tk.END, iid=p['id'], values=(
                 p['numero'],
                 p['date_paiement'],
@@ -1554,11 +1819,37 @@ class PaymentsFrame(ttk.Frame):
                 p['mode_paiement'],
                 p.get('reference', '-'),
                 p['statut']
-            ), tags=(tag,))
+            ), tags=tuple(tags))
     
     def add_payment(self):
         PaymentDialog(self.app.root, self.app, callback=self.load_data)
-    
+
+    def modify_payment(self):
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Attention", "Veuillez sélectionner un paiement à modifier")
+            return
+        
+        payment_id = int(selection[0])
+        PaymentDialog(self.app.root, self.app, payment_id=payment_id, callback=self.load_data)
+
+    def delete_payment(self):
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Attention", "Veuillez sélectionner un paiement à supprimer")
+            return
+            
+        if not messagebox.askyesno("Confirmation", "Voulez-vous vraiment supprimer ce paiement ?"):
+            return
+            
+        payment_id = int(selection[0])
+        try:
+            self.app.db.delete_payment(payment_id)
+            messagebox.showinfo("Succès", "Paiement supprimé")
+            self.load_data()
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Erreur lors de la suppression: {str(e)}")
+
     def create_bordereau(self):
         # Get selected payments with status 'En attente'
         BordereauDialog(self.app.root, self.app, callback=self.load_data)
@@ -1606,6 +1897,9 @@ class SituationFrame(ttk.Frame):
                       value="valorized_movements", command=self.update_ui, bg=BG_COLOR, fg=TEXT_COLOR, selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
         tk.Radiobutton(mode_frame_2, text="État Annuel des Créances", variable=self.mode, 
                       value="annual_receivables", command=self.update_ui, bg=BG_COLOR, fg=TEXT_COLOR, selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
+        
+        tk.Radiobutton(mode_frame_2, text="Analyse des Annulations", variable=self.mode, 
+                      value="cancellations_analysis", command=self.update_ui, bg="orange", fg="black", selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
         
         # Controls Frame (Dynamic)
         self.controls_frame = tk.Frame(self, bg=BG_COLOR)
@@ -1660,7 +1954,7 @@ class SituationFrame(ttk.Frame):
                 self.info_text.insert(tk.END, "Sélectionnez une date et cliquez sur 'Générer Rapport PDF' pour voir l'état journalier des ventes.")
 
         elif mode == "global_consumption":
-            tk.Label(self.controls_frame, text="Date de Situation (J):", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            tk.Label(self.controls_frame, text="Arrêté au :", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
             
             if DateEntry:
                 self.date_entry = DateEntry(self.controls_frame, width=12, background='darkblue',
@@ -1783,23 +2077,85 @@ class SituationFrame(ttk.Frame):
                 self.info_text.delete(1.0, tk.END)
                 self.info_text.insert(tk.END, "Génère l'ÉTAT RÉCAPITULATIF ANNUEL DES CRÉANCES ET RECOUVREMENT CLIENTS.\nCalculs basés sur :\n- Solde au 01/01 (Report N-1 + Historique)\n- Mouvements de l'année (Achats Net, Paiements)\n- Solde Final et % Recouvrement.")
 
+        elif mode == "annual_receivables":
+            tk.Button(self.controls_frame, text="Générer Rapport Créances", bg=ACCENT_COLOR, fg="white",
+                      command=lambda: self._generate_report_creances()).pack(side=tk.LEFT, padx=5)
+                      
+        elif mode == "cancellations_analysis":
+            tk.Label(self.controls_frame, text="Rapport d'analyse des factures annulées", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            tk.Button(self.controls_frame, text="Afficher l'analyse", bg=SECONDARY_COLOR, fg="white",
+                      command=self.load_situation).pack(side=tk.LEFT, padx=5)
+
     def load_situation(self, event=None):
-        if self.mode.get() != "client": return
-        
-        selected = self.client_var.get()
-        if not selected:
-            return
-        client_id = int(selected.split(' - ')[0])
-        situation = self.app.logic.get_client_situation(client_id)
-        
-        self.info_text.delete(1.0, tk.END)
-        self.info_text.insert(tk.END, f"Client: {situation['client']['raison_sociale']}\n")
-        self.info_text.insert(tk.END, f"Seuil de crédit: {format_currency(situation['client']['seuil_credit'])} DA\n\n")
-        self.info_text.insert(tk.END, f"Report N-1: {format_currency(situation['balance']['report'])} DA\n")
-        self.info_text.insert(tk.END, f"Total Paiements: {format_currency(situation['balance']['total_paiements'])} DA\n")
-        self.info_text.insert(tk.END, f"Total Avoirs: {format_currency(situation['balance']['total_avoirs'])} DA\n")
-        self.info_text.insert(tk.END, f"Total Factures: {format_currency(situation['balance']['total_factures'])} DA\n")
-        self.info_text.insert(tk.END, f"\nSOLDE: {format_currency(situation['balance']['solde'])} DA\n")
+        mode = self.mode.get()
+
+        if mode == "client":
+            selected = self.client_var.get()
+            if not selected:
+                return
+            client_id = int(selected.split(' - ')[0])
+            situation = self.app.logic.get_client_situation(client_id)
+            
+            self.info_text.delete(1.0, tk.END)
+            self.info_text.insert(tk.END, f"Client: {situation['client']['raison_sociale']}\n")
+            self.info_text.insert(tk.END, f"Seuil de crédit: {format_currency(situation['client']['seuil_credit'])} DA\n\n")
+            self.info_text.insert(tk.END, f"Report N-1: {format_currency(situation['balance']['report'])} DA\n")
+            self.info_text.insert(tk.END, f"Total Paiements: {format_currency(situation['balance']['total_paiements'])} DA\n")
+            self.info_text.insert(tk.END, f"Total Avoirs: {format_currency(situation['balance']['total_avoirs'])} DA\n")
+            self.info_text.insert(tk.END, f"Total Factures: {format_currency(situation['balance']['total_factures'])} DA\n")
+            self.info_text.insert(tk.END, f"\nSOLDE: {format_currency(situation['balance']['solde'])} DA\n")
+
+        elif mode == "cancellations_analysis":
+            self.info_text.delete(1.0, tk.END)
+            self.info_text.insert(tk.END, "ANALYSE DES ANNULATIONS\n")
+            self.info_text.insert(tk.END, "="*60 + "\n\n")
+            
+            # Fetch data
+            conn = self.app.db._get_connection()
+            c = conn.cursor()
+            c.execute("SELECT * FROM journal_annulations ORDER BY date_annulation DESC")
+            annulations = c.fetchall()
+            
+            if not annulations:
+                self.info_text.insert(tk.END, "Aucune annulation enregistrée.\n")
+                return
+
+            total_perdu_ht = 0.0
+            
+            # Group by Motif
+            by_motif = {}
+            
+            self.info_text.insert(tk.END, f"{'DATE':<12} | {'NUMERO':<10} | {'MONTANT HT':<15} | {'MOTIF'}\n")
+            self.info_text.insert(tk.END, "-"*60 + "\n")
+            
+            for row in annulations:
+                # Handling different row factories
+                try:
+                     # If row is dict-like
+                     date_val = row['date_annulation']
+                     num = row['numero_facture']
+                     motif = row['motif']
+                     mht = row['montant_original_ht']
+                except:
+                     # Fallback tuple index
+                     date_val = row[2]
+                     num = row[5] # Adjusted indices based on typical schema
+                     motif = row[4]
+                     mht = row[6]
+
+                total_perdu_ht += mht
+                
+                if motif not in by_motif: by_motif[motif] = 0
+                by_motif[motif] += 1
+                
+                self.info_text.insert(tk.END, f"{str(date_val)[:10]:<12} | {str(num):<10} | {format_currency(mht):<15} | {motif}\n")
+            
+            self.info_text.insert(tk.END, "-"*60 + "\n")
+            self.info_text.insert(tk.END, f"TOTAL MANQUE À GAGNER (HT): {format_currency(total_perdu_ht)} DA\n\n")
+            
+            self.info_text.insert(tk.END, "SYNTHÈSE PAR MOTIF:\n")
+            for m, count in by_motif.items():
+                self.info_text.insert(tk.END, f"- {m}: {count} fois\n")
 
     def export_pdf(self):
         from utils import generate_situation_pdf, generate_daily_sales_pdf, generate_sales_by_category_pdf
@@ -2093,7 +2449,7 @@ class StockFrame(ttk.Frame):
             # Init = Final - (In - Out) ==> Init = Final - In + Out
             # Net Sales = Ventes (negative) + Retours (positive)
             # We want to display the OUTFLOW. So if we sold 100 (-100) and returned 20 (+20), Net = -80. Display 80.
-            sales_movements = [m['quantite'] for m in movements if m['type_mouvement'] in ['Vente', 'Retour Avoir']]
+            sales_movements = [m['quantite'] for m in movements if m['type_mouvement'] in ['Vente', 'Retour Avoir', 'Annulation Facture']]
             net_sales = sum(sales_movements)
             total_out = abs(net_sales) # Sum of Vente+Avoir should be negative (net outflow), or 0 if balanced.
             
@@ -2904,6 +3260,13 @@ class ReceptionDialog:
         col2 = tk.Frame(main_frame)
         col2.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
 
+        # --- Date Reception ---
+        tk.Label(col1, text="Date Réception (AAAA-MM-JJ)*").pack(anchor="w", pady=(5,0))
+        from datetime import datetime
+        self.date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+        self.date_entry = tk.Entry(col1, textvariable=self.date_var, width=40, bg="#263238", fg="white", insertbackground="white")
+        self.date_entry.pack(fill=tk.X, pady=(0, 10))
+
         # 1. Code Produit
         tk.Label(col1, text="Produit*").pack(anchor="w", pady=(5,0))
         self.code_var = tk.StringVar()
@@ -2979,6 +3342,21 @@ class ReceptionDialog:
         self.lbl_chantier.pack(anchor="w", pady=(5,0))
         self.adresse_chantier = tk.Entry(col2, width=40, state=tk.DISABLED, bg="#455a64", fg="white", insertbackground="white", disabledbackground="#263238")
         self.adresse_chantier.pack(fill=tk.X, pady=(0, 10))
+
+        # Moved Facture Info to Col2 to balance height
+        tk.Label(col2, text="N° facture").pack(anchor="w", pady=(5,0))
+        self.num_facture_rec = tk.Entry(col2, width=40, bg="#455a64", fg="white", insertbackground="white")
+        self.num_facture_rec.pack(fill=tk.X, pady=(0, 10))
+
+        tk.Label(col2, text="Date Fact").pack(anchor="w", pady=(5,0))
+        if DateEntry:
+            self.date_fact_rec = DateEntry(col2, width=38, background=PRIMARY_COLOR, foreground='white',
+                                         headersbackground=PRIMARY_COLOR, headersforeground='white',
+                                         borderwidth=2, date_pattern='dd/mm/yyyy')
+        else:
+            self.date_fact_rec = tk.Entry(col2, width=40, bg="#455a64", fg="white")
+            self.date_fact_rec.insert(0, datetime.now().strftime("%d/%m/%Y"))
+        self.date_fact_rec.pack(fill=tk.X, pady=(0, 10))
         
         # Quantities (bottom full width or split?)
         # Let's put quantities in col1 bottom
@@ -3007,19 +3385,7 @@ class ReceptionDialog:
             self.date_bt.insert(0, datetime.now().strftime("%d/%m/%Y"))
         self.date_bt.pack(fill=tk.X, pady=(0, 10))
 
-        tk.Label(col1, text="N° facture").pack(anchor="w", pady=(5,0))
-        self.num_facture_rec = tk.Entry(col1, width=40, bg="#455a64", fg="white", insertbackground="white")
-        self.num_facture_rec.pack(fill=tk.X, pady=(0, 10))
-
-        tk.Label(col1, text="Date Fact").pack(anchor="w", pady=(5,0))
-        if DateEntry:
-            self.date_fact_rec = DateEntry(col1, width=38, background=PRIMARY_COLOR, foreground='white',
-                                         headersbackground=PRIMARY_COLOR, headersforeground='white',
-                                         borderwidth=2, date_pattern='dd/mm/yyyy')
-        else:
-            self.date_fact_rec = tk.Entry(col1, width=40, bg="#455a64", fg="white")
-            self.date_fact_rec.insert(0, datetime.now().strftime("%d/%m/%Y"))
-        self.date_fact_rec.pack(fill=tk.X, pady=(0, 10))
+        # Facture fields moved to col2
         
         # Motif Ecart
         self.frame_ecart = tk.Frame(col1)
@@ -3107,10 +3473,13 @@ class ReceptionDialog:
         if row:
             r = dict(row)
             # Find product code
-            product = get_db().get_product_by_id(r['product_id'])
-            if product:
-                self.code_var.set(product.get('code_produit', ''))
-                self._on_code_select(None)
+            for label, p in self.product_map.items():
+                if p['id'] == r['product_id']:
+                    self.code_combo.set(label)
+                    self._on_code_select(None) # This will set designation and unite
+                    break
+            
+            self.date_var.set(r['date_reception']) # Load date_reception
             
             self.chauffeur.insert(0, r['chauffeur'])
             self.matricule.insert(0, r['matricule'])
@@ -3128,20 +3497,46 @@ class ReceptionDialog:
             if r['motif_ecart']:
                 self.motif_ecart.insert(0, r['motif_ecart'])
 
+            # Load new fields
+            self.num_bt.insert(0, r.get('num_bon_transfert', ''))
+            if DateEntry and r.get('date_bt'):
+                try:
+                    self.date_bt.set_date(datetime.strptime(r['date_bt'], "%Y-%m-%d"))
+                except ValueError:
+                    pass # Keep default if format is wrong
+            elif r.get('date_bt'):
+                self.date_bt.insert(0, datetime.strptime(r['date_bt'], "%Y-%m-%d").strftime("%d/%m/%Y"))
+
+            self.num_facture_rec.insert(0, r.get('num_facture', ''))
+            if DateEntry and r.get('date_fact'):
+                try:
+                    self.date_fact_rec.set_date(datetime.strptime(r['date_fact'], "%Y-%m-%d"))
+                except ValueError:
+                    pass # Keep default if format is wrong
+            elif r.get('date_fact'):
+                self.date_fact_rec.insert(0, datetime.strptime(r['date_fact'], "%Y-%m-%d").strftime("%d/%m/%Y"))
+
     def save(self):
         try:
             # Retrieve values
-            annee = datetime.now().year
-            date_reception = datetime.now().strftime("%Y-%m-%d")
-            
-            # disabled fields may return empty, which is fine
-            chauffeur = self.chauffeur.get() or "N/A"
-            matricule = self.matricule.get() or "N/A"
-            matricule_remorque = self.matricule_remorque.get() or "" # Can be empty
-            transporteur = self.transporteur.get() or "N/A"
+            date_reception = self.date_var.get().strip()
+            # Validate Date
+            try:
+                from datetime import datetime
+                dt = datetime.strptime(date_reception, "%Y-%m-%d")
+                annee = dt.year
+            except ValueError:
+                messagebox.showerror("Erreur", "Format de date invalide. Utilisez AAAA-MM-JJ")
+                return
+
             lieu_livraison = self.lieu_var.get()
             adresse_chantier = self.adresse_chantier.get() if lieu_livraison == "Sur Chantier" else ""
             
+            chauffeur = self.chauffeur.get()
+            matricule = self.matricule.get()
+            matricule_remorque = self.matricule_remorque.get()
+            transporteur = self.transporteur.get()
+
             product_id = self.selected_product_id
             if not product_id:
                 messagebox.showerror("Erreur", "Veuillez sélectionner un produit")
@@ -3311,6 +3706,16 @@ class InvoiceDialog:
         if self.readonly and self.type_doc == 'Facture':
              tk.Button(btn_frame, text="Ajouter Paiement", bg="#009688", fg="white",
                       font=("Arial", 11, "bold"), command=self.open_payment_dialog).pack(side=tk.RIGHT, padx=20)
+             
+             # BOUTON ANNULER (Rouge/Orange) - Seulement si la facture n'est pas déjà annulée
+             # On vérifie l'état actuel (passé dans init ou à recharger)
+             conn = self.app.db._get_connection()
+             cursor = conn.cursor()
+             cursor.execute("SELECT statut FROM factures WHERE id=?", (self.view_facture_id,))
+             current_status = cursor.fetchone()
+             if current_status and current_status[0] != 'ANNULEE':
+                 tk.Button(btn_frame, text="Annuler la Facture", bg="#d32f2f", fg="white",
+                          font=("Arial", 11, "bold"), command=self.confirm_cancellation).pack(side=tk.LEFT, padx=20)
         
         cancel_text = "Fermer" if self.readonly else "Annuler"
         tk.Button(btn_frame, text=cancel_text, command=self.dialog.destroy).pack(side=tk.RIGHT, padx=20)
@@ -3357,6 +3762,19 @@ class InvoiceDialog:
             
             self.lbl_header_date = tk.Label(header_frame, text="Date: --", bg="#dcedc8", font=("Arial", 12, "bold"), fg="#2e7d32")
             self.lbl_header_date.pack(side=tk.RIGHT, padx=20)
+
+            # Check status for styling
+            if self.view_facture_id:
+                facture = self.app.db.get_facture_by_id(self.view_facture_id)
+                if facture and (facture.get('statut') == 'ANNULEE' or facture.get('statut_facture') == 'Annulée'):
+                    header_frame.config(bg="#ffccbc") # Light Red/Orange
+                    self.lbl_header_num.config(bg="#ffccbc", fg="#d32f2f", text=f"N° Facture: {facture['numero']} (ANNULÉE)")
+                    self.lbl_header_date.config(bg="#ffccbc", fg="#d32f2f")
+                    
+                    if facture.get('motif_annulation'):
+                         tk.Label(header_frame, text=f"Motif: {facture['motif_annulation']}", 
+                                  bg="#ffccbc", fg="#bf360c", font=("Arial", 10, "bold italic")).pack(side=tk.BOTTOM, pady=5)
+
 
         # Client Selection Area
         top_frame = tk.Frame(self.dialog, padx=20, pady=10)
@@ -3436,6 +3854,9 @@ class InvoiceDialog:
             self.date_facture_entry.insert(0, datetime.datetime.now().strftime("%d/%m/%Y"))
             
         self.date_facture_entry.pack(side=tk.LEFT)
+        
+        # Add Tooltip
+        create_tooltip(self.date_facture_entry, "Veuillez choisir la date de la facture")
 
         # Motif Frame (Separate line for Avoir)
         if self.type_doc == 'Avoir':
@@ -3712,6 +4133,48 @@ class InvoiceDialog:
                            client_id=facture['client_id'], 
                            facture_id=facture['id'],
                            callback=self.callback)
+        
+    def confirm_cancellation(self):
+        """Demande confirmation et motif pour l'annulation"""
+        if not self.view_facture_id: return
+        
+        # 1. Ask for Motif
+        dialog = tk.Toplevel(self.dialog)
+        dialog.title("Confirmation d'Annulation")
+        dialog.geometry("400x250")
+        dialog.transient(self.dialog)
+        dialog.grab_set()
+        
+        tk.Label(dialog, text="ATTENTION : Action Irréversible", fg="red", font=("Arial", 12, "bold")).pack(pady=10)
+        tk.Label(dialog, text="Veuillez saisir le motif de l'annulation :").pack(pady=5)
+        
+        motif_entry = tk.Entry(dialog, width=50)
+        motif_entry.pack(pady=5, padx=20)
+        motif_entry.focus_set()
+        
+        def do_cancel():
+            motif = motif_entry.get().strip()
+            if not motif:
+                messagebox.showerror("Erreur", "Le motif est obligatoire.", parent=dialog)
+                return
+            
+            # 2. Call Logic
+            try:
+                success, msg = self.app.logic.annuler_facture(self.view_facture_id, self.app.user['id'], motif)
+                if success:
+                    messagebox.showinfo("Succès", msg, parent=dialog)
+                    dialog.destroy()
+                    self.dialog.destroy()
+                    if self.callback: self.callback()
+                else:
+                    messagebox.showerror("Erreur", msg, parent=dialog)
+            except Exception as e:
+                messagebox.showerror("Erreur", f"Erreur technique: {str(e)}", parent=dialog)
+
+        tk.Button(dialog, text="Confirmer l'Annulation", bg="#d32f2f", fg="white", font=("Arial", 10, "bold"), command=do_cancel).pack(pady=20) 
+        tk.Button(dialog, text="Abandonner", command=dialog.destroy).pack()
+
+
         
 
 
@@ -4651,15 +5114,18 @@ class LigneDialog:
 
 
 class PaymentDialog:
-    def __init__(self, parent, app, client_id=None, facture_id=None, callback=None):
+    def __init__(self, parent, app, client_id=None, facture_id=None, payment_id=None, callback=None):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Nouveau Paiement")
         self.dialog.state('zoomed')
         self.app = app
         self.client_id = client_id
         self.facture_id = facture_id
+        self.payment_id = payment_id
         self.callback = callback
         self._build()
+        if self.payment_id:
+            self._load_payment()
     
     def _build(self):
         tk.Label(self.dialog, text="Client*").pack(pady=5)
@@ -4723,9 +5189,99 @@ class PaymentDialog:
         self.date_fin.pack(side=tk.LEFT, padx=5)
         
         tk.Button(self.dialog, text="Enregistrer", bg=PRIMARY_COLOR, fg="white", command=self.save).pack(pady=20)
+
+    def _load_payment(self):
+        p = self.app.db.get_payment_by_id(self.payment_id)
+        if not p:
+            return
+            
+        # Set Client
+        for c_str in self.client_combo['values']:
+            if c_str.startswith(f"{p['client_id']} -"):
+                self.client_combo.set(c_str)
+                break
+                
+        self.montant.insert(0, str(p['montant']))
+        self.mode_var.set(p['mode_paiement'])
+        if p.get('reference'): self.reference.insert(0, p['reference'])
+        if p.get('banque'): self.banque.set(p['banque'])
+        if p.get('contrat_num'): self.contrat_num.insert(0, p['contrat_num'])
+        
+        # Dates... if DateEntry vs Entry
+        if DateEntry:
+             if p.get('contrat_date_debut'):
+                 try: self.date_debut.set_date(datetime.strptime(p['contrat_date_debut'], '%Y-%m-%d'))
+                 except: pass
+             if p.get('contrat_date_fin'):
+                 try: self.date_fin.set_date(datetime.strptime(p['contrat_date_fin'], '%Y-%m-%d'))
+                 except: pass
+        else:
+             if p.get('contrat_date_debut'): 
+                 self.date_debut.delete(0, tk.END)
+                 self.date_debut.insert(0, datetime.strptime(p['contrat_date_debut'], '%Y-%m-%d').strftime('%d/%m/%Y'))
+             if p.get('contrat_date_fin'): 
+                 self.date_fin.delete(0, tk.END)
+                 self.date_fin.insert(0, datetime.strptime(p['contrat_date_fin'], '%Y-%m-%d').strftime('%d/%m/%Y'))
     
     def save(self):
         try:
+            # Client
+            val = self.client_var.get()
+            if not val:
+                 messagebox.showerror("Erreur", "Client obligatoire")
+                 return
+            client_id = int(val.split(' - ')[0])
+            
+            # Montant
+            try:
+                montant = float(self.montant.get())
+            except ValueError:
+                messagebox.showerror("Erreur", "Montant invalide")
+                return
+
+            date_paiement = datetime.now().strftime("%Y-%m-%d") # Or add date field? 
+            # Original code didn't have date field for payment itself? 
+            # Looking at _build (previously viewed), I didn't see explicit Payment Date field, only Contract Dates.
+            # Usually creates with TODAY date.
+            # If editing, DO WE KEEP ORIGINAL DATE?
+            # Yes, standard behavior.
+            if self.payment_id:
+                old_p = self.app.db.get_payment_by_id(self.payment_id)
+                date_paiement = old_p['date_paiement']
+
+            mode = self.mode_var.get()
+            ref = self.reference.get()
+            banque = self.banque_var.get()
+            
+            c_num = self.contrat_num.get()
+            
+            # Dates
+            c_debut = None
+            c_fin = None
+            
+            if DateEntry:
+                if isinstance(self.date_debut, DateEntry):
+                    c_debut = self.date_debut.get_date().strftime("%Y-%m-%d")
+                    c_fin = self.date_fin.get_date().strftime("%Y-%m-%d")
+            
+            # Fallback if text entry or logic above failed
+            if not c_debut:
+                # Try parsing text
+                 try: c_debut = datetime.strptime(self.date_debut.get(), "%d/%m/%Y").strftime("%Y-%m-%d")
+                 except: c_debut = None
+                 try: c_fin = datetime.strptime(self.date_fin.get(), "%d/%m/%Y").strftime("%Y-%m-%d")
+                 except: c_fin = None
+
+            if self.payment_id:
+                self.app.db.update_payment(self.payment_id, date_paiement, client_id, montant, mode, ref, banque, c_num, c_debut, c_fin)
+            else:
+                self.app.db.create_paiement(date_paiement, client_id, montant, mode, self.facture_id, ref, banque, c_num, c_debut, c_fin, self.app.user['id'])
+            
+            if self.callback: self.callback()
+            self.dialog.destroy()
+            
+        except Exception as e:
+            messagebox.showerror("Erreur", str(e))
             client_id = int(self.client_var.get().split(' - ')[0])
             success, msg, _ = self.app.logic.create_payment(
                 client_id=client_id,

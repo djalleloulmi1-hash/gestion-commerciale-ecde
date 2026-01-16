@@ -12,9 +12,38 @@ from reportlab.lib import colors
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter, A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm
+from reportlab.lib.units import cm, mm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+
+class NumberedCanvas(canvas.Canvas):
+    def __init__(self, *args, **kwargs):
+        canvas.Canvas.__init__(self, *args, **kwargs)
+        self._saved_page_states = []
+
+    def showPage(self):
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        """add page info to each page (page x of y)"""
+        num_pages = len(self._saved_page_states)
+        for state in self._saved_page_states:
+            self.__dict__.update(state)
+            self.draw_page_number(num_pages)
+            canvas.Canvas.showPage(self)
+        canvas.Canvas.save(self)
+
+    def draw_page_number(self, page_count):
+        # Determine width based on page size
+        width, height = self._pagesize
+        self.setFont("Helvetica", 9)
+        self.drawRightString(width - 20*mm, 10*mm,
+            "Page %d / %d" % (self._pageNumber, page_count))
+
+def get_image(path, width=1*cm):
+    pass # Placeholder if needed, but we use Image flowable mostly.
+
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
@@ -181,16 +210,29 @@ def generate_invoice_pdf(facture_data: Dict[str, Any], filename: str):
         alignment=TA_CENTER
     )
     
-    # Header Table (Logo Left, Title Center)
+
+    # Watermark Function
+    def draw_watermark(canvas, doc):
+        canvas.saveState()
+        canvas.setFont('Helvetica-Bold', 60)
+        canvas.setFillColorRGB(0.8, 0.2, 0.2, 0.3) # Red with opacity
+        canvas.translate(10*cm, 15*cm)
+        canvas.rotate(45)
+        canvas.drawCentredString(0, 0, "ANNULÉE")
+        canvas.restoreState()
+
+    if facture_data.get('statut') == 'ANNULEE' or facture_data.get('statut_facture') == 'Annulée':
+         on_page = draw_watermark
+    else:
+         on_page = None
+
+    # Header section with Logo
     logo_path = check_logo_exists()
     title = facture_data['type_document'].upper()
     
     if logo_path:
         img = Image(logo_path, width=2.5*cm, height=2.5*cm)
         img.hAlign = 'LEFT'
-        
-        # Title mostly centered but offset by logo slightly or just next to it
-        # We use a table to put them side-by-side
         header_data = [[img, Paragraph(title, title_style)]]
         header_table = Table(header_data, colWidths=[3*cm, 15*cm])
         header_table.setStyle(TableStyle([
@@ -204,6 +246,13 @@ def generate_invoice_pdf(facture_data: Dict[str, Any], filename: str):
         
     story.append(Spacer(1, 0.5*cm))
     
+    # MOTIF ANNULATION (If applicable)
+    if (facture_data.get('statut') == 'ANNULEE' or facture_data.get('statut_facture') == 'Annulée') and facture_data.get('motif_annulation'):
+         motif_style = ParagraphStyle(
+             'MotifRed', parent=styles['Normal'], textColor=colors.red, fontSize=12, alignment=TA_CENTER)
+         story.append(Paragraph(f"<b>MOTIF D'ANNULATION :</b> {facture_data['motif_annulation']}", motif_style))
+         story.append(Spacer(1, 0.5*cm))
+
     # Header info
     header_data = [
         [f"N. {facture_data['numero']}", f"Date: {facture_data['date_facture']}"],
@@ -278,7 +327,10 @@ def generate_invoice_pdf(facture_data: Dict[str, Any], filename: str):
     montant_lettres = nombre_en_lettres(facture_data['montant_ttc'])
     story.append(Paragraph(f"<b>Arrêté la présente facture à la somme de :</b> {montant_lettres}", styles['Normal']))
     
-    doc.build(story)
+    if on_page:
+        doc.build(story, onFirstPage=on_page, onLaterPages=on_page)
+    else:
+        doc.build(story)
     return filename
 
 
@@ -679,157 +731,212 @@ def generate_creances_pdf(data: List[Dict[str, Any]], filename: str):
 
 def generate_ca_pdf(data: Dict[str, Any], filename: str):
     "Generate PDF for Etat du Chiffre d Affaires"
-    c = canvas.Canvas(filename, pagesize=A4)
+    doc = SimpleDocTemplate(filename, pagesize=A4, topMargin=4.5*cm)
+    story = []
     width, height = A4
+    styles = getSampleStyleSheet()
+
+    # --- Header Callback ---
+    def draw_header(canvas, doc):
+        canvas.saveState()
+        # 1. Logo
+        logo_path = "logo_gica.png" if os.path.exists("logo_gica.png") else check_logo_exists()
+        if logo_path:
+            try:
+                canvas.drawImage(logo_path, 1*cm, height - 3*cm, width=3.5*cm, height=2.0*cm, preserveAspectRatio=True, mask='auto')
+            except:
+                pass
+        
+        # 2. Text
+        center_x = width / 2.0
+        canvas.setFont("Helvetica", 10)
+        canvas.drawCentredString(center_x, height - 1.2*cm, "GROUPE INDUSTRIEL DES CIMENTS D'ALGERIE")
+        canvas.setFont("Helvetica-Bold", 12)
+        canvas.drawCentredString(center_x, height - 1.7*cm, "ENTREPRISE DES CIMENTS ET DERIVES D'ECH-CHELIFF")
+        canvas.setFont("Helvetica-Bold", 16)
+        canvas.drawCentredString(center_x, height - 2.5*cm, "ETAT DU CHIFFRE D'AFFAIRES")
+        
+        canvas.setFont("Helvetica", 11)
+        canvas.drawCentredString(center_x, height - 3.2*cm, f"Période: {data['start_date']} au {data['end_date']}")
+        
+        canvas.restoreState()
+
+    # story.append(Spacer(1, 4*cm))
+
+    # Summary Table
+    # Layout:
+    # CA BRUT | value
+    # TOTAL AVOIRS | value
+    # CA NET | value
     
-    # Header
-    logo_path = check_logo_exists()
-    if logo_path:
-        c.drawImage(logo_path, 30, height - 90, width=70, height=70, preserveAspectRatio=True, mask='auto', anchor='nw')
+    summary_data = [
+        ["CA BRUT (Factures):", f"{data['ca_brut']:,.2f} DA"],
+        ["TOTAL AVOIRS:", f"- {data['total_avoirs']:,.2f} DA"],
+        ["CA NET:", f"{data['ca_net']:,.2f} DA"]
+    ]
     
-    c.setFont("Helvetica-Bold", 16)
-    c.drawCentredString(width / 2, height - 50, "ETAT DU CHIFFRE D'AFFAIRES")
+    summary_table = Table(summary_data, colWidths=[10*cm, 6*cm])
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.whitesmoke),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+        ('FONTNAME', (0, 2), (-1, 2), 'Helvetica-Bold'), # CA NET Bold
+        ('FONTSIZE', (0, 2), (-1, 2), 12),
+        ('TOPPADDING', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+    ]))
     
-    c.setFont("Helvetica", 10)
-    c.drawString(30, height - 80, f"Période: {data['start_date']} au {data['end_date']}")
-    
-    # Summary Box
-    y = height - 140
-    c.setFillColorRGB(0.95, 0.95, 0.95)
-    c.rect(150, y - 60, width - 300, 80, fill=1, stroke=1)
-    c.setFillColorRGB(0, 0, 0)
-    
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(170, y, "CA BRUT (Factures):")
-    c.drawRightString(width - 170, y, f"{data['ca_brut']:,.2f} DA")
-    
-    c.drawString(170, y - 25, "TOTAL AVOIRS:")
-    c.drawRightString(width - 170, y - 25, f"- {data['total_avoirs']:,.2f} DA")
-    
-    c.setStrokeColorRGB(0, 0, 0) 
-    c.line(170, y - 35, width - 170, y - 35)
-    
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(170, y - 55, "CA NET:")
-    c.drawRightString(width - 170, y - 55, f"{data['ca_net']:,.2f} DA")
+    story.append(summary_table)
+    story.append(Spacer(1, 1*cm))
     
     # Details of Avoirs
-    y -= 100
     if data['details_avoirs']:
-        c.setFont("Helvetica-Bold", 12)
-        c.drawString(30, y, "Détail des Avoirs déduits:")
-        y -= 20
+        story.append(Paragraph("Détail des Avoirs déduits:", styles['Heading3']))
+        story.append(Spacer(1, 0.2*cm))
         
-        c.setFont("Helvetica-Bold", 9)
-        c.drawString(30, y, "Avoir N.")
-        c.drawString(130, y, "Ref Facture")
-        c.drawString(250, y, "Date")
-        c.drawRightString(width - 30, y, "Montant HT")
-        c.line(30, y - 5, width - 30, y - 5)
-        y -= 20
+        headers = ["Avoir N.", "Ref Facture", "Date", "Montant HT"]
+        table_data = [headers]
         
-        c.setFont("Helvetica", 9)
         for item in data['details_avoirs']:
-            if y < 50:
-                c.showPage()
-                y = height - 50
-                
-            c.drawString(30, y, str(item['numero']))
-            c.drawString(130, y, str(item['facture_ref']))
-            c.drawString(250, y, str(item['date']))
-            c.drawRightString(width - 30, y, f"{item['montant']:,.2f}")
-            y -= 15
+            table_data.append([
+                str(item['numero']),
+                str(item['facture_ref']),
+                str(item['date']),
+                f"{item['montant']:,.2f}"
+            ])
+            
+        t = Table(table_data, colWidths=[4*cm, 4*cm, 4*cm, 4*cm])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
+        ]))
+        story.append(t)
     else:
-        c.setFont("Helvetica-Oblique", 10)
-        c.drawString(30, y, "Aucun avoir sur cette période.")
+        story.append(Paragraph("Aucun avoir sur cette période.", styles['Normal']))
 
-    c.save()
+    doc.build(story, onFirstPage=draw_header, onLaterPages=draw_header, canvasmaker=NumberedCanvas)
+
 
 def generate_situation_pdf(data: Dict[str, Any], filename: str):
     "Generate PDF for Client Situation"
-    c = canvas.Canvas(filename, pagesize=A4)
+    doc = SimpleDocTemplate(filename, pagesize=A4, topMargin=4.5*cm)
+    story = []
     width, height = A4
+    styles = getSampleStyleSheet()
     
-    # Header
-    logo_path = check_logo_exists()
-    if logo_path:
-        c.drawImage(logo_path, 30, height - 90, width=70, height=70, preserveAspectRatio=True, mask='auto', anchor='nw')
+    # --- Header Callback ---
+    def draw_header(canvas, doc):
+        canvas.saveState()
+        # 1. Logo
+        logo_path = "logo_gica.png" if os.path.exists("logo_gica.png") else check_logo_exists()
+        if logo_path:
+            try:
+                canvas.drawImage(logo_path, 1*cm, height - 3*cm, width=3.5*cm, height=2.0*cm, preserveAspectRatio=True, mask='auto')
+            except:
+                pass
+        
+        # 2. Text
+        center_x = width / 2.0
+        canvas.setFont("Helvetica", 10)
+        canvas.drawCentredString(center_x, height - 1.2*cm, "GROUPE INDUSTRIEL DES CIMENTS D'ALGERIE")
+        canvas.setFont("Helvetica-Bold", 12)
+        canvas.drawCentredString(center_x, height - 1.7*cm, "ENTREPRISE DES CIMENTS ET DERIVES D'ECH-CHELIFF")
+        canvas.setFont("Helvetica-Bold", 16)
+        canvas.drawCentredString(center_x, height - 2.5*cm, "SITUATION CLIENT")
+        
+        canvas.setFont("Helvetica", 11)
+        canvas.drawCentredString(center_x, height - 3.2*cm, f"Date: {datetime.now().strftime('%d/%m/%Y')}")
+        
+        canvas.restoreState()
     
-    c.setFont("Helvetica-Bold", 16)
-    c.drawCentredString(width / 2, height - 50, "SITUATION CLIENT")
+    # story.append(Spacer(1, 4*cm))
     
     client = data['client']
-    c.setFont("Helvetica", 10)
-    c.drawString(30, height - 100, f"Client: {client['raison_sociale']}")
-    c.drawString(30, height - 120, f"Adresse: {client['adresse']}")
-    c.drawString(30, height - 140, f"Date: {datetime.now().strftime('%d/%m/%Y')}")
+    story.append(Paragraph(f"<b>Client:</b> {client['raison_sociale']}", styles['Normal']))
+    story.append(Paragraph(f"<b>Adresse:</b> {client['adresse']}", styles['Normal']))
+    story.append(Spacer(1, 1*cm))
     
     # Balance Summary
     balance = data['balance']
-    y = height - 180
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(30, y, "Résumé Financier:")
-    y -= 20
     
-    c.setFont("Helvetica", 10)
-    c.drawString(50, y, "Report N-1:")
-    c.drawRightString(200, y, f"{balance['report']:,.2f}")
-    y -= 15
-    c.drawString(50, y, "Total Factures:")
-    c.drawRightString(200, y, f"{balance['total_factures']:,.2f}")
-    y -= 15
-    c.drawString(50, y, "Total Paiements:")
-    c.drawRightString(200, y, f"{balance['total_paiements']:,.2f}")
-    y -= 15
-    c.drawString(50, y, "Total Avoirs:")
-    c.drawRightString(200, y, f"{balance['total_avoirs']:,.2f}")
-    y -= 20
+    summary_data = [
+        ["Résumé Financier", ""],
+        ["Report N-1:", f"{balance['report']:,.2f}"],
+        ["Total Factures:", f"{balance['total_factures']:,.2f}"],
+        ["Total Paiements:", f"{balance['total_paiements']:,.2f}"],
+        ["Total Avoirs:", f"{balance['total_avoirs']:,.2f}"],
+        ["SOLDE ACTUEL:", f"{balance['solde']:,.2f} DA"]
+    ]
     
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, y, "SOLDE ACTUEL:")
-    c.drawRightString(200, y, f"{balance['solde']:,.2f} DA")
+    t = Table(summary_data, colWidths=[8*cm, 6*cm])
+    t.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (1, 0), 'Helvetica-Bold'),
+        ('SPAN', (0, 0), (1, 0)), # Merge title
+        ('ALIGN', (0, 0), (1, 0), 'CENTER'),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('BACKGROUND', (0, 0), (1, 0), colors.lightgrey), # Header bg
+        ('ALIGN', (1, 1), (1, -1), 'RIGHT'),
+        
+        # Solde Row
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.whitesmoke),
+        ('FONTSIZE', (0, -1), (-1, -1), 12),
+        ('TOPPADDING', (0, -1), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, -1), (-1, -1), 8),
+    ]))
     
-    c.save()
+    story.append(t)
+
+    doc.build(story, onFirstPage=draw_header, onLaterPages=draw_header, canvasmaker=NumberedCanvas)
 
 def generate_client_state_pdf(clients: List[Dict[str, Any]], filename: str):
     "Generate PDF for detailed client state"
     # Use landscape because there are many columns
-    doc = SimpleDocTemplate(filename, pagesize=landscape(A4))
+    doc = SimpleDocTemplate(filename, pagesize=landscape(A4), topMargin=4.5*cm)
     story = []
+    
+    width, height = landscape(A4)
     styles = getSampleStyleSheet()
     
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=18,
-        textColor=colors.HexColor('#1a237e'),
-        spaceAfter=20,
-        alignment=TA_CENTER
-    )
-    
-    # Header Table (Logo Left, Title Center)
-    logo_path = check_logo_exists()
-    title_text = "ÉTAT DES CLIENTS DÉTAILLÉ"
-    
-    if logo_path:
-        img = Image(logo_path, width=2.5*cm, height=2.5*cm)
-        img.hAlign = 'LEFT'
+    # --- Header Callback ---
+    def draw_header(canvas, doc):
+        canvas.saveState()
         
-        # Landscape
-        header_data = [[img, Paragraph(title_text, title_style)]]
-        header_table = Table(header_data, colWidths=[3*cm, 23*cm])
-        header_table.setStyle(TableStyle([
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('ALIGN', (0,0), (0,0), 'LEFT'),
-            ('ALIGN', (1,0), (1,0), 'CENTER'),
-        ]))
-        story.append(header_table)
-    else:
-        story.append(Paragraph(title_text, title_style))
+        # 1. Logo
+        logo_path = "logo_gica.png" if os.path.exists("logo_gica.png") else check_logo_exists()
+        if logo_path:
+            try:
+                canvas.drawImage(logo_path, 1*cm, height - 3*cm, width=3.5*cm, height=2.0*cm, preserveAspectRatio=True, mask='auto')
+            except:
+                pass
         
-    story.append(Spacer(1, 0.5*cm))
-    story.append(Paragraph(f"Date: {datetime.now().strftime('%d/%m/%Y')}", styles['Normal']))
-    story.append(Spacer(1, 0.5*cm))
+        # 2. Text
+        center_x = width / 2.0
+        
+        canvas.setFont("Helvetica", 10)
+        canvas.drawCentredString(center_x, height - 1.2*cm, "GROUPE INDUSTRIEL DES CIMENTS D'ALGERIE")
+        
+        canvas.setFont("Helvetica-Bold", 12)
+        canvas.drawCentredString(center_x, height - 1.7*cm, "ENTREPRISE DES CIMENTS ET DERIVES D'ECH-CHELIFF")
+        
+        canvas.setFont("Helvetica-Bold", 16)
+        canvas.drawCentredString(center_x, height - 2.5*cm, "ÉTAT DES CLIENTS DÉTAILLÉ")
+        
+        # Subtitle/Date
+        canvas.setFont("Helvetica", 11)
+        canvas.drawCentredString(center_x, height - 3.2*cm, f"Date: {datetime.now().strftime('%d/%m/%Y')}")
+        
+        # Line
+        canvas.setLineWidth(1)
+        # canvas.line(1*cm, height - 3.8*cm, width - 1*cm, height - 3.8*cm)
+        
+        canvas.restoreState()
+    
+    # Spacer for header
+    # story.append(Spacer(1, 4*cm))
     
     # Table Data
     # Columns: Raison Soc, Adresse, RC, NIS, NIF, Art Imp
@@ -866,48 +973,50 @@ def generate_client_state_pdf(clients: List[Dict[str, Any]], filename: str):
     ]))
     
     story.append(t)
-    doc.build(story)
+    doc.build(story, onFirstPage=draw_header, onLaterPages=draw_header, canvasmaker=NumberedCanvas)
     return filename
 
 
 def generate_invoice_state_pdf(invoice_lines: List[Dict[str, Any]], date_range: Dict[str, str], filename: str):
     "Generate PDF for detailed invoice state by date range"
-    doc = SimpleDocTemplate(filename, pagesize=A4)
+    doc = SimpleDocTemplate(filename, pagesize=A4, topMargin=4.5*cm)
     story = []
+    
+    width, height = A4
     styles = getSampleStyleSheet()
     
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=18,
-        textColor=colors.HexColor('#1a237e'),
-        spaceAfter=20,
-        alignment=TA_CENTER
-    )
-    
-    # Header Table (Logo Left, Title Center)
-    logo_path = check_logo_exists()
-    title_text = "ÉTAT DES FACTURES"
-    
-    if logo_path:
-        img = Image(logo_path, width=2.5*cm, height=2.5*cm)
-        img.hAlign = 'LEFT'
+    # --- Header Callback ---
+    def draw_header(canvas, doc):
+        canvas.saveState()
         
-        # Portrait
-        header_data = [[img, Paragraph(title_text, title_style)]]
-        header_table = Table(header_data, colWidths=[3*cm, 15*cm])
-        header_table.setStyle(TableStyle([
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('ALIGN', (0,0), (0,0), 'LEFT'),
-            ('ALIGN', (1,0), (1,0), 'CENTER'),
-        ]))
-        story.append(header_table)
-    else:
-        story.append(Paragraph(title_text, title_style))
+        # 1. Logo
+        logo_path = "logo_gica.png" if os.path.exists("logo_gica.png") else check_logo_exists()
+        if logo_path:
+            try:
+                canvas.drawImage(logo_path, 1*cm, height - 3*cm, width=3.5*cm, height=2.0*cm, preserveAspectRatio=True, mask='auto')
+            except:
+                pass
         
-    story.append(Spacer(1, 0.5*cm))
-    story.append(Paragraph(f"Période: {date_range['start']} au {date_range['end']}", styles['Normal']))
-    story.append(Spacer(1, 0.5*cm))
+        # 2. Text
+        center_x = width / 2.0
+        
+        canvas.setFont("Helvetica", 10)
+        canvas.drawCentredString(center_x, height - 1.2*cm, "GROUPE INDUSTRIEL DES CIMENTS D'ALGERIE")
+        
+        canvas.setFont("Helvetica-Bold", 12)
+        canvas.drawCentredString(center_x, height - 1.7*cm, "ENTREPRISE DES CIMENTS ET DERIVES D'ECH-CHELIFF")
+        
+        canvas.setFont("Helvetica-Bold", 16)
+        canvas.drawCentredString(center_x, height - 2.5*cm, "ÉTAT DES FACTURES")
+        
+        # Subtitle/Date
+        canvas.setFont("Helvetica", 11)
+        canvas.drawCentredString(center_x, height - 3.2*cm, f"Période: {date_range['start']} au {date_range['end']}")
+        
+        canvas.restoreState()
+    
+    # Spacer for header
+    # story.append(Spacer(1, 4*cm))
     
     # Table Data
     # Columns: N. Facture, Date, Produit, Montant HT
@@ -975,48 +1084,50 @@ def generate_invoice_state_pdf(invoice_lines: List[Dict[str, Any]], date_range: 
     t.setStyle(TableStyle(base_style))
     
     story.append(t)
-    doc.build(story)
+    doc.build(story, onFirstPage=draw_header, onLaterPages=draw_header, canvasmaker=NumberedCanvas)
     return filename
 
 
 def generate_etat_104_pdf(sales_data: List[Dict[str, Any]], date_range: Dict[str, str], filename: str):
     "Generate PDF for Etat 104 (Sales by Client)"
-    doc = SimpleDocTemplate(filename, pagesize=landscape(A4))
+    doc = SimpleDocTemplate(filename, pagesize=landscape(A4), topMargin=4.5*cm)
     story = []
+    
+    width, height = landscape(A4)
     styles = getSampleStyleSheet()
     
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=18,
-        textColor=colors.HexColor('#1a237e'),
-        spaceAfter=20,
-        alignment=TA_CENTER
-    )
-    
-    # Header Table (Logo Left, Title Center)
-    logo_path = check_logo_exists()
-    title_text = "ÉTAT N. 104 - CHIFFRE D'AFFAIRES PAR CLIENT"
-    
-    if logo_path:
-        img = Image(logo_path, width=2.5*cm, height=2.5*cm)
-        img.hAlign = 'LEFT'
+    # --- Header Callback ---
+    def draw_header(canvas, doc):
+        canvas.saveState()
         
-        # Landscape
-        header_data = [[img, Paragraph(title_text, title_style)]]
-        header_table = Table(header_data, colWidths=[3*cm, 23*cm])
-        header_table.setStyle(TableStyle([
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('ALIGN', (0,0), (0,0), 'LEFT'),
-            ('ALIGN', (1,0), (1,0), 'CENTER'),
-        ]))
-        story.append(header_table)
-    else:
-        story.append(Paragraph(title_text, title_style))
+        # 1. Logo
+        logo_path = "logo_gica.png" if os.path.exists("logo_gica.png") else check_logo_exists()
+        if logo_path:
+            try:
+                canvas.drawImage(logo_path, 1*cm, height - 3*cm, width=3.5*cm, height=2.0*cm, preserveAspectRatio=True, mask='auto')
+            except:
+                pass
         
-    story.append(Spacer(1, 0.5*cm))
-    story.append(Paragraph(f"Période: {date_range['start']} au {date_range['end']}", styles['Normal']))
-    story.append(Spacer(1, 0.5*cm))
+        # 2. Text
+        center_x = width / 2.0
+        
+        canvas.setFont("Helvetica", 10)
+        canvas.drawCentredString(center_x, height - 1.2*cm, "GROUPE INDUSTRIEL DES CIMENTS D'ALGERIE")
+        
+        canvas.setFont("Helvetica-Bold", 12)
+        canvas.drawCentredString(center_x, height - 1.7*cm, "ENTREPRISE DES CIMENTS ET DERIVES D'ECH-CHELIFF")
+        
+        canvas.setFont("Helvetica-Bold", 16)
+        canvas.drawCentredString(center_x, height - 2.5*cm, "ÉTAT N. 104 - CHIFFRE D'AFFAIRES PAR CLIENT")
+        
+        # Subtitle/Date
+        canvas.setFont("Helvetica", 11)
+        canvas.drawCentredString(center_x, height - 3.2*cm, f"Période: {date_range['start']} au {date_range['end']}")
+        
+        canvas.restoreState()
+    
+    # Spacer for header
+    # story.append(Spacer(1, 4*cm))
     
     # Table Data
     # Columns: Raison Sociale, RC, NIF, NIS, Art Imp, CA HT
@@ -1063,48 +1174,50 @@ def generate_etat_104_pdf(sales_data: List[Dict[str, Any]], date_range: Dict[str
     ]))
     
     story.append(t)
-    doc.build(story)
+    doc.build(story, onFirstPage=draw_header, onLaterPages=draw_header, canvasmaker=NumberedCanvas)
     return filename
 
 
 def generate_payments_state_pdf(payments: List[Dict[str, Any]], date_range: Dict[str, str], filename: str):
     "Generate PDF for detailed payments state by date range"
-    doc = SimpleDocTemplate(filename, pagesize=A4)
+    doc = SimpleDocTemplate(filename, pagesize=A4, topMargin=4.5*cm)
     story = []
+    
+    width, height = A4
     styles = getSampleStyleSheet()
     
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=18,
-        textColor=colors.HexColor('#1a237e'),
-        spaceAfter=20,
-        alignment=TA_CENTER
-    )
-    
-    # Header Table (Logo Left, Title Center)
-    logo_path = check_logo_exists()
-    title_text = "ÉTAT DES PAIEMENTS"
-    
-    if logo_path:
-        img = Image(logo_path, width=2.5*cm, height=2.5*cm)
-        img.hAlign = 'LEFT'
+    # --- Header Callback ---
+    def draw_header(canvas, doc):
+        canvas.saveState()
         
-        # Portrait
-        header_data = [[img, Paragraph(title_text, title_style)]]
-        header_table = Table(header_data, colWidths=[3*cm, 15*cm])
-        header_table.setStyle(TableStyle([
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('ALIGN', (0,0), (0,0), 'LEFT'),
-            ('ALIGN', (1,0), (1,0), 'CENTER'),
-        ]))
-        story.append(header_table)
-    else:
-        story.append(Paragraph(title_text, title_style))
+        # 1. Logo
+        logo_path = "logo_gica.png" if os.path.exists("logo_gica.png") else check_logo_exists()
+        if logo_path:
+            try:
+                canvas.drawImage(logo_path, 1*cm, height - 3*cm, width=3.5*cm, height=2.0*cm, preserveAspectRatio=True, mask='auto')
+            except:
+                pass
         
-    story.append(Spacer(1, 0.5*cm))
-    story.append(Paragraph(f"Période: {date_range['start']} au {date_range['end']}", styles['Normal']))
-    story.append(Spacer(1, 0.5*cm))
+        # 2. Text
+        center_x = width / 2.0
+        
+        canvas.setFont("Helvetica", 10)
+        canvas.drawCentredString(center_x, height - 1.2*cm, "GROUPE INDUSTRIEL DES CIMENTS D'ALGERIE")
+        
+        canvas.setFont("Helvetica-Bold", 12)
+        canvas.drawCentredString(center_x, height - 1.7*cm, "ENTREPRISE DES CIMENTS ET DERIVES D'ECH-CHELIFF")
+        
+        canvas.setFont("Helvetica-Bold", 16)
+        canvas.drawCentredString(center_x, height - 2.5*cm, "ÉTAT DES PAIEMENTS")
+        
+        # Subtitle/Date
+        canvas.setFont("Helvetica", 11)
+        canvas.drawCentredString(center_x, height - 3.2*cm, f"Période: {date_range['start']} au {date_range['end']}")
+        
+        canvas.restoreState()
+    
+    # Spacer for header
+    # story.append(Spacer(1, 4*cm))
     
     # Table Data
     # Columns: N. Paiement, Date, Client, Mode, Réf, Montant
@@ -1145,62 +1258,120 @@ def generate_payments_state_pdf(payments: List[Dict[str, Any]], date_range: Dict
     ]))
     
     story.append(t)
-    doc.build(story)
+    doc.build(story, onFirstPage=draw_header, onLaterPages=draw_header, canvasmaker=NumberedCanvas)
     return filename
 
 
+
+def get_conditional_styles(data_matrix, start_row=0, start_col=0):
+    """
+    Generate ReportLab TableStyle commands for conditional formatting.
+    Positives (>0) -> Green
+    Negatives (<0) -> Orange (#ff9800)
+    Zeros -> Blue
+    """
+    styles = []
+    orange_color = colors.HexColor('#ff9800')
+    green_color = colors.green
+    blue_color = colors.blue
+    valid_chars = "0123456789.-"
+    
+    for r_idx, row in enumerate(data_matrix):
+        for c_idx, cell_value in enumerate(row):
+            cell_str = str(cell_value).replace(" DA", "").replace("%", "")
+            
+            # If contains letters, it is text (Description, Client Name, etc.) -> Skip
+            if any(c.isalpha() for c in cell_str):
+                continue
+
+            # Val cleanup: Keep only numbers, dots and negative sign
+            val_str = "".join([c for c in cell_str if c in valid_chars])
+            
+            try:
+                # Check for empty string or non-numeric first
+                if not val_str or val_str == "." or val_str == "-":
+                    continue
+
+                val = float(val_str)
+                actual_row = r_idx + start_row
+                actual_col = c_idx + start_col
+                
+                # Check for zero (handling tiny approximations)
+                if abs(val) < 0.001:
+                     styles.append(('TEXTCOLOR', (actual_col, actual_row), (actual_col, actual_row), blue_color))
+                elif val > 0:
+                    styles.append(('TEXTCOLOR', (actual_col, actual_row), (actual_col, actual_row), green_color))
+                else:
+                    styles.append(('TEXTCOLOR', (actual_col, actual_row), (actual_col, actual_row), orange_color))
+
+            except (ValueError, TypeError):
+                # Text or other non-numeric content -> Default Black
+                pass
+                
+    return styles
+
 def generate_daily_sales_pdf(data: Dict[str, Any], filename: str):
     "Generate Daily Sales Report PDF (Etat de vente journalier)"
-    doc = SimpleDocTemplate(filename, pagesize=landscape(A4))
+    doc = SimpleDocTemplate(filename, pagesize=landscape(A4), topMargin=4.5*cm)
     story = []
     
     width, height = landscape(A4)
     
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=18,
-        textColor=colors.black,
-        spaceAfter=10,
-        alignment=TA_CENTER
-    )
     
-    # 1. Header with Logo and Titles
-    # Create a table for header layout: Logo Left, Text Center
-    # Check for specific GICA logo first, else fallback
-    logo_path = "logo_gica.png" if os.path.exists("logo_gica.png") else check_logo_exists()
-    
-    header_content = []
-    if logo_path:
-        # User requested to scale it to fit top left corner without interfering
-        # The logo is likely rectangular (wide). 3.5cm width should fit well in the 4cm column.
-        header_content.append(Image(logo_path, width=3.5*cm, height=2.0*cm, kind='proportional'))
-    else:
-        header_content.append("")
+    # --- Header Callback ---
+    def draw_header(canvas, doc):
+        canvas.saveState()
         
-    title_text = (
-        "<font size=14>GROUPE INDUSTRIEL DES CIMENTS D'ALGERIE</font><br/>"
-        "<font size=16><b>ENTREPRISE DES CIMENTS ET DERIVES D'ECH-CHELIFF</b></font><br/>"
-        "<font size=20><b>ETAT DES VENTES QUOTIDIENNES</b></font><br/>"
-        "<font size=12><i>Dépôt Oued Smar</i></font>"
-    )
-    header_content.append(Paragraph(title_text, title_style))
+        # 1. Logo (Top Left)
+        logo_path = "logo_gica.png" if os.path.exists("logo_gica.png") else check_logo_exists()
+        if logo_path:
+            # Draw Image: x=1cm, y=height-3cm, w=3.5cm, h=2cm
+            try:
+                canvas.drawImage(logo_path, 1*cm, height - 3*cm, width=3.5*cm, height=2.0*cm, preserveAspectRatio=True, mask='auto')
+            except:
+                pass
+
+        # 2. Text (Center/Left aligned next to logo)
+        # We use a Paragraph to handle formatting (bold, size) easily, but drawing Paragraph on canvas requires 'wrapOn' and 'drawOn'
+        
+        # Center X position for title
+        center_x = width / 2.0
+        
+        # Manually drawing text for header using standard fonts to keep it simple and consistent
+        # Title 1
+        canvas.setFont("Helvetica", 10)
+        canvas.drawCentredString(center_x, height - 1.2*cm, "GROUPE INDUSTRIEL DES CIMENTS D'ALGERIE")
+        
+        # Title 2
+        canvas.setFont("Helvetica-Bold", 12)
+        canvas.drawCentredString(center_x, height - 1.7*cm, "ENTREPRISE DES CIMENTS ET DERIVES D'ECH-CHELIFF")
+        
+        # Main Title
+        canvas.setFont("Helvetica-Bold", 16)
+        canvas.drawCentredString(center_x, height - 2.5*cm, "ETAT DES VENTES QUOTIDIENNES")
+        
+        # Subtitle
+        canvas.setFont("Helvetica-Oblique", 10)
+        canvas.drawCentredString(center_x, height - 3.0*cm, "Dépôt Oued Smar")
+        
+        # Date (Top Right or Below Title)
+        canvas.setFont("Helvetica", 11)
+        # canvas.drawRightString(width - 1*cm, height - 3.5*cm, f"Journée du : {data['date']}")
+        canvas.drawCentredString(center_x, height - 3.5*cm, f"Journée du : {data['date']}")
+        
+        # Bottom Line of Header
+        canvas.setLineWidth(1)
+        canvas.line(1*cm, height - 3.8*cm, width - 1*cm, height - 3.8*cm)
+        
+        canvas.restoreState()
+
+    # --- Build Story (Body) ---
     
-    header_table = Table([header_content], colWidths=[4*cm, 20*cm])
-    header_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('ALIGN', (0, 0), (0, 0), 'LEFT'), # Align logo to left
-    ]))
-    story.append(header_table)
-    story.append(Spacer(1, 0.5*cm))
-    
-    # Date Line
-    date_line_style = ParagraphStyle('DateLink', parent=styles['Normal'], alignment=TA_RIGHT, fontSize=12)
-    story.append(Paragraph(f"<b>Journée du : {data['date']}</b>", date_line_style))
-    story.append(Spacer(1, 0.5*cm))
-    
+    # Spacer for Header (since header is drawn on canvas, we need to push body down)
+    # Header takes approx 4cm
+    # story.append(Spacer(1, 2.5*cm))
+        
     # 2. Detailed Table (Top)
     # COLS: Code, Clients, Produit (Code), Facture (N., Date), Qte, HT, MR(?), TVA, TTC
     
@@ -1254,22 +1425,20 @@ def generate_daily_sales_pdf(data: Dict[str, Any], filename: str):
     
     det_table.setStyle(TableStyle([
         ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'), # Global Bold
         ('FONTSIZE', (0, 0), (-1, 0), 7), # Reduced header size
         ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
         ('ALIGN', (5, 1), (-1, -1), 'RIGHT'), # Numbers right aligned
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('FONTSIZE', (0, 1), (-1, -1), 7), # Reduced body size
         ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'), # Total row bold
+        # ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'), # Covered by global
         ('LEFTPADDING', (0, 0), (-1, -1), 2),
         ('RIGHTPADDING', (0, 0), (-1, -1), 2),
-    ]))
+    ] + get_conditional_styles(table_data[1:], start_row=1, start_col=0)))
     
     story.append(det_table)
     story.append(Spacer(1, 1*cm))
-    
-    # 3. Summary Table (Bottom)
     
     # 3. Summary Table (Bottom)
     
@@ -1294,10 +1463,11 @@ def generate_daily_sales_pdf(data: Dict[str, Any], filename: str):
     sum_col_widths = [12*cm, 5*cm, 5*cm]
     
     sum_table = Table(summary_data, colWidths=sum_col_widths)
+    # Don't repeat rows for summary table if it splits (though it shouldn't usually)
     
     sum_table.setStyle(TableStyle([
         ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), # Header Bold
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'), # Global Bold
         ('FONTSIZE', (0, 0), (-1, -1), 10),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -1307,13 +1477,9 @@ def generate_daily_sales_pdf(data: Dict[str, Any], filename: str):
         # Header Style
         ('BACKGROUND', (0, 0), (-1, 0), colors.whitesmoke),
         
-        # Data Rows Styles
-        ('TEXTCOLOR', (1, 1), (1, -1), colors.blue), # Daily Qty Blue
-        ('FONTNAME', (2, 1), (2, -1), 'Helvetica-Bold'), # Cumulative Bold
-        
         # Alternating row colors for better readability
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.aliceblue]),
-    ]))
+    ] + get_conditional_styles(summary_data[1:], start_row=1, start_col=0)))
     
     story.append(sum_table)
     story.append(Spacer(1, 1*cm))
@@ -1338,7 +1504,8 @@ def generate_daily_sales_pdf(data: Dict[str, Any], filename: str):
     story.append(Spacer(1, 1.5*cm))
     story.append(Paragraph("LE CHEF SERVICE COMMERCIAL", ParagraphStyle('Sig', parent=styles['Normal'], alignment=TA_RIGHT, fontName='Helvetica-Bold')))
     
-    doc.build(story)
+    # Build with NumberedCanvas
+    doc.build(story, onFirstPage=draw_header, onLaterPages=draw_header, canvasmaker=NumberedCanvas)
     return filename
 
 
@@ -1348,23 +1515,53 @@ def generate_sales_by_category_pdf(data: Dict[str, Any], start_date: str, end_da
     """
     doc = SimpleDocTemplate(filename, pagesize=A4,
                             rightMargin=2*cm, leftMargin=2*cm,
-                            topMargin=2*cm, bottomMargin=2*cm)
+                            topMargin=4.5*cm, bottomMargin=2*cm)
     
+    width, height = A4
     elements = []
     
-    # Header
+    # --- Header Callback ---
+    def draw_header(canvas, doc):
+        canvas.saveState()
+        
+        # 1. Logo
+        logo_path = "logo_gica.png" if os.path.exists("logo_gica.png") else check_logo_exists()
+        if logo_path:
+            try:
+                canvas.drawImage(logo_path, 1*cm, height - 3*cm, width=3.5*cm, height=2.0*cm, preserveAspectRatio=True, mask='auto')
+            except:
+                pass
+        
+        # 2. Text
+        center_x = width / 2.0
+        
+        canvas.setFont("Helvetica", 10)
+        canvas.drawCentredString(center_x, height - 1.2*cm, "GROUPE INDUSTRIEL DES CIMENTS D'ALGERIE")
+        
+        canvas.setFont("Helvetica-Bold", 12)
+        canvas.drawCentredString(center_x, height - 1.7*cm, "ENTREPRISE DES CIMENTS ET DERIVES D'ECH-CHELIFF")
+        
+        canvas.setFont("Helvetica-Bold", 16)
+        canvas.drawCentredString(center_x, height - 2.5*cm, "ÉTAT DU CHIFFRE D'AFFAIRES PÉRIODIQUE")
+        
+        # Subtitle/Date
+        canvas.setFont("Helvetica", 11)
+        canvas.drawCentredString(center_x, height - 3.2*cm, f"Période: {start_date} au {end_date}")
+        
+        canvas.restoreState()
+    
+    # Spacer for header
+    # elements.append(Spacer(1, 4*cm))
+    
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle('Title', parent=styles['Heading1'], alignment=TA_CENTER, fontSize=16, spaceAfter=20)
-    elements.append(Paragraph(f"ÉTAT DU CHIFFRE D'AFFAIRES PÉRIODIQUE", title_style))
-    elements.append(Paragraph(f"Période du: {start_date} au {end_date}", 
-                             ParagraphStyle('SubTitle', parent=styles['Normal'], alignment=TA_CENTER, fontSize=12, spaceAfter=20)))
     
     # Define Table Style
-    table_style = TableStyle([
+    # Define Table Style (Global Bold)
+    base_style_cmds = [
         ('BACKGROUND', (0, 0), (-1, 0), colors.Color(0.2, 0.3, 0.4)), # Dark blue header
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'), # Global Bold
         ('FONTSIZE', (0, 0), (-1, 0), 10),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
         ('BACKGROUND', (0, 1), (-1, -1), colors.white), # White rows
@@ -1372,7 +1569,7 @@ def generate_sales_by_category_pdf(data: Dict[str, Any], start_date: str, end_da
         ('GRID', (0, 0), (-1, -1), 1, colors.black),
         ('ALIGN', (0, 0), (1, -1), 'LEFT'), # Align Names Left
         ('ALIGN', (-2, 0), (-1, -1), 'RIGHT'), # Align Numbers Right
-    ])
+    ]
 
     subtotal_style = TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), colors.lightgrey),
@@ -1422,7 +1619,7 @@ def generate_sales_by_category_pdf(data: Dict[str, Any], start_date: str, end_da
         
         # Create Table
         t = Table(table_data, colWidths=[8*cm, 3*cm, 3*cm, 4*cm])
-        t.setStyle(table_style)
+        t.setStyle(TableStyle(base_style_cmds + get_conditional_styles(table_data[1:], start_row=1, start_col=0)))
         elements.append(t)
         
         # Subtotal
@@ -1440,7 +1637,7 @@ def generate_sales_by_category_pdf(data: Dict[str, Any], start_date: str, end_da
     gt.setStyle(grand_total_style)
     elements.append(gt)
     
-    doc.build(elements)
+    doc.build(elements, onFirstPage=draw_header, onLaterPages=draw_header, canvasmaker=NumberedCanvas)
 
 
 def preview_and_print_pdf(filename: str):

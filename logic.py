@@ -52,7 +52,7 @@ class BusinessLogic:
         
         # Get reception details
         cursor.execute("""
-            SELECT lieu_livraison, product_id, quantite_recue, numero
+            SELECT lieu_livraison, product_id, quantite_recue, numero, date_reception
             FROM receptions WHERE id = ?
         """, (reception_id,))
         reception = cursor.fetchone()
@@ -60,7 +60,7 @@ class BusinessLogic:
         if not reception:
             return False
         
-        lieu, product_id, quantite, numero = reception
+        lieu, product_id, quantite, numero, date_reception = reception
         
         # [CRITICAL] Block Child Products from Reception
         product = self.db.get_product_by_id(product_id)
@@ -77,7 +77,8 @@ class BusinessLogic:
                 quantite=quantite,
                 reference_document=numero,
                 document_id=reception_id,
-                created_by=user_id
+                created_by=user_id,
+                date_mouvement=date_reception
             )
             
             # Update actual stock quantity is already handled by log_stock_movement
@@ -163,6 +164,98 @@ class BusinessLogic:
             conn.rollback()
             return False
 
+    
+    def annuler_facture(self, facture_id: int, user_id: int, motif: str) -> Tuple[bool, str]:
+        """
+        Annule une facture par neutralisation.
+        1. Vérifie si déjà annulée.
+        2. Ré-intègre le stock (inverse de la vente).
+        3. Journalise l'opération.
+        4. Passe les montants à 0 et statut à 'ANNULEE'.
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            conn.execute("BEGIN TRANSACTION")
+            
+            # 1. Fetch Facture
+            facture = self.db.get_facture_by_id(facture_id)
+            if not facture:
+                return False, "Facture introuvable."
+            
+            if facture.get('statut') == 'ANNULEE' or facture.get('statut_facture') == 'Annulée':
+                return False, "Facture déjà annulée."
+
+            if facture['type_document'] != 'Facture':
+                 return False, "Seules les factures peuvent être annulées (pas les Avoirs)."
+
+            # 2. Re-credit Stock (Inverse of Invoice)
+            # Invoice reduced stock (-Qty), so Cancellation increases it (+Qty).
+            # We log this as "Annulation Facture" to be traced.
+            
+            details_stock = []
+            
+            for ligne in facture['lignes']:
+                pid = ligne['product_id']
+                qty = ligne['quantite'] # This is positive in DB for lines
+                
+                # Check if product exists
+                product = self.db.get_product_by_id(pid)
+                if product:
+                     # Log Movement
+                     self.db.log_stock_movement(
+                        product_id=pid,
+                        type_mouvement='Annulation Facture',
+                        quantite=qty, # Positive to add back to stock
+                        reference_document=f"Annul {facture['numero']}",
+                        document_id=facture_id, # Link to same ID? Or new? Standard is link to Doc.
+                        created_by=user_id,
+                        date_mouvement=facture['date_facture']
+                     )
+                     details_stock.append(f"{product['nom']}: +{qty}")
+
+            # 3. Log to Journal_Annulations
+            import json
+            cursor.execute("""
+                INSERT INTO journal_annulations 
+                (facture_id, numero_facture, user_id, motif, montant_original_ht, montant_original_ttc, details_stock)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                facture_id, 
+                facture['numero'], 
+                user_id, 
+                motif, 
+                facture['montant_ht'], 
+                facture['montant_ttc'],
+                json.dumps(details_stock, ensure_ascii=False)
+            ))
+            
+            # 4. Neutralize Facture
+            # Set amounts to 0.00
+            cursor.execute("""
+                UPDATE factures 
+                SET montant_ht = 0, montant_tva = 0, montant_ttc = 0, 
+                    statut = 'ANNULEE', motif_annulation = ?
+                WHERE id = ?
+            """, (motif, facture_id))
+            
+            # Set lines to 0? Or keep them for history?
+            # User requirement: "Mise à Zéro : Passer toutes les quantités et montants de la facture à 0 en base de données."
+            # This is destructive but required.
+            cursor.execute("""
+                UPDATE lignes_facture
+                SET quantite = 0, montant = 0, prix_unitaire = 0
+                WHERE facture_id = ?
+            """, (facture_id,))
+            
+            conn.commit()
+            return True, "Facture annulée avec succès."
+            
+        except Exception as e:
+            conn.rollback()
+            return False, f"Erreur lors de l'annulation: {str(e)}"
+
     def process_facture_stock(self, facture_id: int, user_id: int) -> bool:
         """
         Process invoice stock impact (decrease for facture, increase for avoir)
@@ -191,7 +284,8 @@ class BusinessLogic:
                 quantite=quantite,
                 reference_document=numero,
                 document_id=facture_id,
-                created_by=user_id
+                created_by=user_id,
+                date_mouvement=facture['date_facture']
             )
         
         return True
@@ -934,7 +1028,7 @@ class BusinessLogic:
                 if not is_within_limit:
                     client = self.db.get_client_by_id(client_id)
                     return (False, 
-                           f"Dépassement: {balance_info['depassement']:.2f} DA", 
+                           f"Seuil de crédit dépassé de {balance_info['depassement']:.2f} DA.\n\nSolde Actuel: {balance_info['solde']:.2f} DA\nSeuil: {balance_info['seuil_credit']:.2f} DA", 
                            None)
 
             elif type_vente == 'Sur Avances':
@@ -995,16 +1089,19 @@ class BusinessLogic:
             annee = current_year
             numero = self.db.generate_facture_number(type_document, annee)
             
+            # Determine Initial Etat Paiement
+            etat_paiement = 'Comptant' if type_vente == 'Au comptant' else 'A Terme'
+            
             cursor.execute("""
                 INSERT INTO factures (numero, type_document, type_vente, annee, date_facture, 
                 client_id, facture_origine_id, montant_ht, montant_tva, montant_ttc, statut, mode_paiement, 
                 ref_paiement, banque, contract_id, contrat_code, chauffeur, matricule_tracteur, matricule_remorque,
-                transporteur, client_compte_bancaire, client_categorie, created_by, statut_facture)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                transporteur, client_compte_bancaire, client_categorie, created_by, statut_facture, etat_paiement)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (numero, type_document, type_vente, annee, current_date, 
                   client_id, facture_origine_id, totals['montant_ht'], totals['montant_tva'], totals['montant_ttc'],
                   statut_facture, mode_paiement, ref_paiement, banque, contract_id, contrat_code, 
-                  chauffeur, matricule_tracteur, matricule_remorque, transporteur, client_compte_bancaire, client_categorie, user_id, statut_facture))
+                  chauffeur, matricule_tracteur, matricule_remorque, transporteur, client_compte_bancaire, client_categorie, user_id, statut_facture, etat_paiement))
             
             facture_id = cursor.lastrowid
             
@@ -1287,7 +1384,54 @@ class BusinessLogic:
                   (montant, client_id))
         conn.commit()
         
+        # Update Invoice Payment Status
+        if facture_id:
+             self.update_invoice_payment_status(facture_id)
+        
         return (True, "Paiement enregistré avec succès", paiement_id)
+
+    def update_invoice_payment_status(self, facture_id: int):
+        """
+        Recalculate and update 'etat_paiement' for a facture based on payments and total.
+        Statuses: 'Comptant' (if initially so and 0 pay?), 'A Terme' (initial), 'Non soldée', 'Payée'
+        """
+        try:
+            conn = self.db._get_connection()
+            c = conn.cursor()
+            
+            # Get Invoice info
+            c.execute("SELECT montant_ttc, type_vente FROM factures WHERE id = ?", (facture_id,))
+            row = c.fetchone()
+            if not row: return
+            
+            total_ttc = row[0]
+            type_vente = row[1]
+            
+            # Get Sum of Payments (excluding rejected/cancelled if any? check 'statut')
+            # Assuming 'En attente' and 'Validé' count? Or just all? 
+            # Usually strict accounting counts validated. But for UI feedback let's count all non-cancelled?
+            # Existing `get_all_factures` query utilized: (SELECT SUM(montant) FROM paiements WHERE facture_id = f.id)
+            c.execute("SELECT COALESCE(SUM(montant), 0) FROM paiements WHERE facture_id = ?", (facture_id,))
+            paid_amount = c.fetchone()[0]
+            
+            new_status = 'A Terme' # Default fallback
+            
+            if abs(paid_amount) >= (total_ttc - 0.05): # Tolerance for float
+                new_status = 'Payée'
+            elif paid_amount > 0:
+                new_status = 'Non soldée'
+            else:
+                # 0 Payments
+                if type_vente == 'Au comptant':
+                    new_status = 'Comptant'
+                else:
+                    new_status = 'A Terme'
+            
+            c.execute("UPDATE factures SET etat_paiement = ? WHERE id = ?", (new_status, facture_id))
+            conn.commit()
+            
+        except Exception as e:
+            print(f"Error updating payment status for {facture_id}: {e}")
     
     def create_bordereau(self, banque: str, paiement_ids: List[int], 
                         user_id: Optional[int] = None) -> Tuple[bool, str, Optional[int]]:
@@ -1827,6 +1971,7 @@ class BusinessLogic:
         products = cursor.fetchall()
         
         report_data = []
+        seen_units = set()
         
         grand_totals = {
             "day": {"init": 0.0, "in": 0.0, "out": 0.0},
@@ -1872,6 +2017,9 @@ class BusinessLogic:
             pid = p['id']
             cout = p['cout_revient'] or 0.0
             base_init = p['stock_initial'] or 0.0
+            
+            if p['unite']:
+                seen_units.add(p['unite'])
             
             # 1. Calculate S.Init (Year)
             rec_b = cursor.execute(q_rec_before, (pid, year_start)).fetchone()[0]
@@ -1945,6 +2093,22 @@ class BusinessLogic:
             grand_totals["final"] += s_final
             grand_totals["val_final"] += (s_final * cout)
             
+
+            
+        # Check for mixed units
+        if len(seen_units) > 1:
+            # Suppress quantity totals
+            grand_totals["day"]["init"] = ""
+            grand_totals["day"]["in"] = ""
+            grand_totals["day"]["out"] = ""
+            grand_totals["month"]["init"] = ""
+            grand_totals["month"]["in"] = ""
+            grand_totals["month"]["out"] = ""
+            grand_totals["year"]["init"] = ""
+            grand_totals["year"]["in"] = ""
+            grand_totals["year"]["out"] = ""
+            grand_totals["final"] = ""
+
         return {
             "date": day_str,
             "data": report_data,

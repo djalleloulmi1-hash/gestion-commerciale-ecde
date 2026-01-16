@@ -123,6 +123,60 @@ class LoginWindow:
 
 def main():
     """Main application entry point"""
+    # [NEW] Check Database Existence & Prompt if Missing
+    import os
+    import configparser
+    from tkinter import filedialog
+    
+    config_path = "config.ini"
+    default_db_path = r"C:\GICA_PROJET\gestion_commerciale.db"
+    
+    # Resolve expected path
+    target_path = default_db_path
+    if os.path.exists(config_path):
+        cfg = configparser.ConfigParser()
+        try:
+            cfg.read(config_path)
+            if 'DATABASE' in cfg and 'path' in cfg['DATABASE']:
+                 candidate = cfg['DATABASE']['path'].strip()
+                 if candidate:
+                     target_path = candidate
+        except:
+            pass
+
+    # If file doesn't exist, prompt user
+    if not os.path.exists(target_path):
+        # Create hidden root for dialog (since we haven't started app yet)
+        root_tmp = tk.Tk()
+        root_tmp.withdraw()
+        
+        msg = f"La base de données n'a pas été trouvée à l'emplacement :\n{target_path}\n\nVoulez-vous indiquer l'emplacement réel ?"
+        # Note: We must update window to ensure dialog appears on top/focus
+        root_tmp.update()
+        
+        if messagebox.askyesno("Base de données introuvable", msg):
+            new_path = filedialog.askopenfilename(
+                title="Sélectionner la base de données",
+                filetypes=[("Base de données SQLite", "*.db"), ("Tous les fichiers", "*.*")]
+            )
+            if new_path:
+                # Update config.ini
+                cfg = configparser.ConfigParser()
+                if os.path.exists(config_path):
+                    cfg.read(config_path)
+                
+                if 'DATABASE' not in cfg:
+                    cfg['DATABASE'] = {}
+                cfg['DATABASE']['path'] = new_path
+                
+                try:
+                    with open(config_path, 'w') as configfile:
+                        cfg.write(configfile)
+                except Exception as e:
+                    messagebox.showerror("Erreur", f"Impossible de sauvegarder la configuration:\n{e}")
+        
+        root_tmp.destroy()
+
     try:
         while True:
             # Show login window

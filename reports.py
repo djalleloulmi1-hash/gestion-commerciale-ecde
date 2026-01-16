@@ -238,10 +238,10 @@ def generate_stock_valuation_pdf(data, output_path):
         
     t = Table(table_data, colWidths=[2.5*cm] + [2.5*cm]*9)
     
-    # Style
-    style = TableStyle([
+    # Base Styles
+    base_styles = [
         ('GRID', (0,0), (-1,-1), 0.5, colors.black),
-        ('FONTNAME', (0,0), (-1,1), 'Helvetica-Bold'),
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'), # GLOBAL BOLD
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         
@@ -255,8 +255,12 @@ def generate_stock_valuation_pdf(data, output_path):
         
         ('BACKGROUND', (0,0), (-1,1), colors.lightgrey),
         ('FONTSIZE', (0,0), (-1,-1), 8),
-    ])
-    t.setStyle(style)
+    ]
+    
+    # Conditional Styles (Skip 2 header rows, Col 0 is Date - handled by parser)
+    cond_styles = get_conditional_styles(table_data[2:], start_row=2, start_col=0)
+    
+    t.setStyle(TableStyle(base_styles + cond_styles))
     
     elements.append(t)
     elements.append(Spacer(1, 2*cm))
@@ -399,7 +403,7 @@ def generate_global_consumption_pdf(date_str, output_path=None):
     title_style.alignment = 1 # Center
     
     date_fmt = datetime.strptime(date_str, '%Y-%m-%d').strftime('%d/%m/%Y')
-    title = Paragraph(f"ETAT DE CONSOMMATION GLOBAL - JOURNEE DU {date_fmt}", title_style)
+    title = Paragraph(f"ETAT DE CONSOMMATION GLOBAL - A FIN {date_fmt}", title_style)
     elements.append(title)
     elements.append(Spacer(1, 1*cm))
     
@@ -424,9 +428,9 @@ def generate_global_consumption_pdf(date_str, output_path=None):
     col_widths = [6*cm, 1.5*cm] + [3*cm]*6
     t = Table(table_data, colWidths=col_widths, repeatRows=2)
     
-    style = TableStyle([
+    base_styles = [
         ('GRID', (0,0), (-1,-1), 0.5, colors.black),
-        ('FONTNAME', (0,0), (-1,1), 'Helvetica-Bold'),
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'), # GLOBAL BOLD
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('ALIGN', (0,2), (0,-1), 'LEFT'), # Products left align
@@ -440,8 +444,12 @@ def generate_global_consumption_pdf(date_str, output_path=None):
         
         ('BACKGROUND', (0,0), (-1,1), colors.lightgrey),
         ('FONTSIZE', (0,0), (-1,-1), 9),
-    ])
-    t.setStyle(style)
+    ]
+    
+    # Conditional Styles (Skip 2 header rows, Skip Col 0,1 (Des, U))
+    cond_styles = get_conditional_styles(table_data[2:], start_row=2, start_col=0)
+    
+    t.setStyle(TableStyle(base_styles + cond_styles))
     
     elements.append(t)
     elements.append(Spacer(1, 2*cm))
@@ -459,6 +467,44 @@ def generate_global_consumption_pdf(date_str, output_path=None):
     
     doc.build(elements)
     return output_path
+
+def get_conditional_styles(data_matrix, start_row=0, start_col=0):
+    """
+    Generate ReportLab TableStyle commands for conditional formatting.
+    Positives (>0) -> Green
+    Negatives (<0) -> Orange (#ff9800)
+    Zeros/Text -> Blue (if 0) or Black (default)
+    """
+    styles = []
+    orange_color = colors.HexColor('#ff9800')
+    green_color = colors.green
+    blue_color = colors.blue
+    
+    for r_idx, row in enumerate(data_matrix):
+        for c_idx, cell_value in enumerate(row):
+            # Val cleanup
+            val_str = str(cell_value).replace(" DA", "").replace(" ", "").replace(",", ".").replace("%", "")
+            try:
+                # Check for empty string or non-numeric first
+                if not val_str.strip():
+                    continue
+
+                val = float(val_str)
+                actual_row = r_idx + start_row
+                actual_col = c_idx + start_col
+                
+                if val > 0.001:
+                    styles.append(('TEXTCOLOR', (actual_col, actual_row), (actual_col, actual_row), green_color))
+                elif val < -0.001:
+                    styles.append(('TEXTCOLOR', (actual_col, actual_row), (actual_col, actual_row), orange_color))
+                else:
+                    # Effectively Zero
+                    styles.append(('TEXTCOLOR', (actual_col, actual_row), (actual_col, actual_row), blue_color))
+            except (ValueError, TypeError):
+                # Text or other non-numeric content -> Default Black
+                pass
+                
+    return styles
 
 def generate_movements_valorises_pdf(date_str, output_path=None):
     from logic import get_logic
@@ -539,18 +585,15 @@ def generate_movements_valorises_pdf(date_str, output_path=None):
     ])
 
     # Col Widths
-    # Adjusted for visibility and fitness on one page
-    # Des: 5cm, U/Cost: 1.8cm
-    # Remainder approx 2.15cm per data column
     cw = 2.15*cm
     col_widths = [5*cm, 1.8*cm] + [cw]*10
     
     t1 = Table(t1_data, colWidths=col_widths, repeatRows=2)
     
-    style1 = TableStyle([
+    # Base Styles
+    base_styles = [
         ('GRID', (0,0), (-1,-1), 0.5, colors.black),
-        ('FONTNAME', (0,0), (-1,1), 'Helvetica-Bold'), # Header Bold
-        ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'), # Footer Bold
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'), # GLOBAL BOLD
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('ALIGN', (0,2), (0,-2), 'LEFT'), # Products left align (exclude header/total)
@@ -568,8 +611,12 @@ def generate_movements_valorises_pdf(date_str, output_path=None):
         ('FONTSIZE', (0,0), (-1,-1), 8),
         ('LEFTPADDING', (0,0), (-1,-1), 2),
         ('RIGHTPADDING', (0,0), (-1,-1), 2),
-    ])
-    t1.setStyle(style1)
+    ]
+    
+    # Apply Conditional Formatting (Skip headers [0,1])
+    cond_styles = get_conditional_styles(t1_data[2:], start_row=2, start_col=0) # Start col 0 to match data
+    
+    t1.setStyle(TableStyle(base_styles + cond_styles))
     elements.append(t1)
     elements.append(Spacer(1, 0.5*cm)) # Reduced spacing from 1cm
     
@@ -578,9 +625,6 @@ def generate_movements_valorises_pdf(date_str, output_path=None):
     elements.append(Spacer(1, 0.1*cm)) # Reduced spacing
     
     # Same Header Structure but for values
-    # Usually Values don't have Unit column? Assuming same structure.
-    # Description, U, [Day Val Init, In, Out]...
-    
     h1_v = ["Désignation", "Cout U.", "JOURNEE", "", "", "MOIS", "", "", "ANNEE", "", "", "VAL. FINALE"]
     h2_v = ["", "", "S.Init", "Entrées", "Sorties", "S.Init", "Entrées", "Sorties", "S.Init", "Entrées", "Sorties", ""]
     
@@ -632,12 +676,14 @@ def generate_movements_valorises_pdf(date_str, output_path=None):
     ])
     
     t2 = Table(t2_data, colWidths=col_widths, repeatRows=2)
-    t2.setStyle(style1) # Reuse style
+    # Apply Conditional Formatting (Skip headers [0,1], Start Col 0)
+    cond_styles_v = get_conditional_styles(t2_data[2:], start_row=2, start_col=0)
+    
+    t2.setStyle(TableStyle(base_styles + cond_styles_v)) # Reuse base style
     elements.append(t2)
     elements.append(Spacer(1, 0.5*cm)) # Reduced spacing from 1cm
     
     # Signature Blocks
-    # "Section Facturation", "Le Chef Service Commercial", "Chef Service Comptabilité", "Le Chef Depot/Assistant PDG"
     sig_data = [
         ["Section Facturation", "Le Chef Service Commercial", "Chef Service Comptabilité", "Le Chef Depot/Assistant PDG"],
         ["", "", "", ""] # Space for signing
@@ -803,9 +849,10 @@ def generate_annual_receivables_pdf(data, date_n, output_path=None):
     
     t = Table(table_data, colWidths=col_widths, repeatRows=1)
     
-    style = TableStyle([
+    # Base Styles
+    base_styles = [
         ('GRID', (0,0), (-1,-1), 0.5, colors.black),
-        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'), # Header
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'), # GLOBAL BOLD
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('ALIGN', (0,1), (0,-1), 'LEFT'), # Raison Sociale Left
@@ -814,10 +861,15 @@ def generate_annual_receivables_pdf(data, date_n, output_path=None):
         ('FONTSIZE', (0,0), (-1,-1), 8),
         
         # Total Row Style
-        ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
         ('BACKGROUND', (0,-1), (-1,-1), colors.lightgrey),
-    ])
-    t.setStyle(style)
+        # ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'), # Redundant
+    ]
+    
+    # Conditional Styles (Skip 1 header row, Skip Col 0 (Raison Soc))
+    cond_styles = get_conditional_styles(table_data[1:], start_row=1, start_col=0)
+    
+    t.setStyle(TableStyle(base_styles + cond_styles))
+
     
     elements.append(t)
     elements.append(Spacer(1, 2*cm))

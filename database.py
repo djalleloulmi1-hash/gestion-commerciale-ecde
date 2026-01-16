@@ -5,16 +5,11 @@ Handles all database operations, schema creation, and data access
 
 import sqlite3
 import os
+import hashlib
+import configparser
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
-
-# ==================================================================================
-# MASTER SCHEMA - The Single Source of Truth for Database Structure
-# ==================================================================================
-# ATTENTION : Pour toute modification de structure, mettez d'abord à jour ce MASTER_SCHEMA.
-# Le programme se chargera de répercuter les changements sur le fichier .db au prochain lancement.
-# ==================================================================================
 
 # ==================================================================================
 # MASTER SCHEMA - The Single Source of Truth for Database Structure
@@ -133,6 +128,8 @@ MASTER_SCHEMA = {
         "matricule_tracteur": "TEXT",
         "matricule_remorque": "TEXT",
         "transporteur": "TEXT",
+        "statut": "TEXT DEFAULT 'VALIDE'",
+        "motif_annulation": "TEXT",
         "created_by": "INTEGER REFERENCES users(id)",
         "created_at": "TEXT DEFAULT CURRENT_TIMESTAMP"
     },
@@ -145,6 +142,17 @@ MASTER_SCHEMA = {
         "montant": "REAL NOT NULL",
         "taux_remise": "REAL DEFAULT 0.0",
         "prix_initial": "REAL DEFAULT 0.0"
+    },
+    "journal_annulations": {
+        "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+        "facture_id": "INTEGER NOT NULL",
+        "numero_facture": "TEXT NOT NULL",
+        "date_annulation": "TEXT DEFAULT CURRENT_TIMESTAMP",
+        "user_id": "INTEGER REFERENCES users(id)",
+        "motif": "TEXT NOT NULL",
+        "montant_original_ht": "REAL NOT NULL",
+        "montant_original_ttc": "REAL NOT NULL",
+        "details_stock": "TEXT" 
     },
     "paiements": {
         "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -173,6 +181,7 @@ MASTER_SCHEMA = {
         "document_id": "INTEGER",
         "stock_avant": "REAL NOT NULL",
         "stock_apres": "REAL NOT NULL",
+        "date_mouvement": "TEXT",
         "created_by": "INTEGER REFERENCES users(id)",
         "created_at": "TEXT DEFAULT CURRENT_TIMESTAMP"
     },
@@ -220,15 +229,33 @@ MASTER_SCHEMA = {
 class DatabaseManager:
     """Manages SQLite database connections and operations"""
     
-    # Force local absolute path as requested
+    # Default fallback path (Legacy)
+    # We now prefer config.ini
     DEFAULT_DB_PATH = r"C:\GICA_PROJET\gestion_commerciale.db"
 
     def __init__(self, db_path: str = None):
-        # Use default if not provided, else check if it's the safe path
-        if db_path is None:
-            self.db_path = self.DEFAULT_DB_PATH
-        else:
+        # 1. Try to load from Config File
+        config_path = "config.ini"
+        loaded_path = None
+        
+        if os.path.exists(config_path):
+             config = configparser.ConfigParser()
+             try:
+                 config.read(config_path)
+                 if 'DATABASE' in config and 'path' in config['DATABASE']:
+                     candidate = config['DATABASE']['path'].strip()
+                     if candidate:
+                         loaded_path = os.path.abspath(candidate)
+             except Exception as e:
+                 print(f"[Warning] Could not read config.ini: {e}")
+
+        # 2. Priority: Constructor Arg > Config File > Default Constant
+        if db_path is not None:
             self.db_path = db_path
+        elif loaded_path is not None:
+             self.db_path = loaded_path
+        else:
+            self.db_path = self.DEFAULT_DB_PATH
             
         self.connection: Optional[sqlite3.Connection] = None
         
@@ -361,27 +388,68 @@ class DatabaseManager:
     
     # ==================== USER OPERATIONS ====================
     
+    def hash_password(self, password: str) -> str:
+        """Hash password using SHA-256 (Simple implementation)"""
+        # Ideally use salt + pbkdf2, but for local app speed/compat:
+        return hashlib.sha256(password.encode()).hexdigest()
+
+    def verify_password(self, stored_password: str, provided_password: str) -> bool:
+        """Verify password (handles both HASHED and LEGACY CLEARTEXT)"""
+        # 1. Try Hash
+        if stored_password == self.hash_password(provided_password):
+            return True
+        # 2. Try Cleartext (Legacy Fallback for migration)
+        # Verify if stored_password is NOT a hash (len 64 for sha256)
+        # And matches plain text
+        if len(stored_password) != 64 and stored_password == provided_password:
+             return True
+             
+        return False
+    
     def authenticate_user(self, username: str, password: str) -> Optional[Dict[str, Any]]:
         """Authenticate user and return user data"""
         conn = self._get_connection()
         cursor = conn.cursor()
+        
+        # Determine if we should query by cleartext or just fetch user to verify
+        # Safer: Fetch user by username, then verify password in python
         cursor.execute("""
-            SELECT id, username, full_name, role, active
+            SELECT id, username, password, full_name, role, active
             FROM users
-            WHERE username = ? AND password = ? AND active = 1
-        """, (username, password))
+            WHERE username = ? AND active = 1
+        """, (username,))
+        
         row = cursor.fetchone()
-        return dict(row) if row else None
+        if row:
+            stored_pwd = row['password']
+            if self.verify_password(stored_pwd, password):
+                # Auto-Migrate: If password was cleartext, update it to hash now
+                if len(stored_pwd) != 64: 
+                    new_hash = self.hash_password(password)
+                    cursor.execute("UPDATE users SET password = ? WHERE id = ?", (new_hash, row['id']))
+                    conn.commit()
+                    print(f"[Security] Auto-migrated password for user {username}")
+                
+                # Return dict without password
+                user_data = dict(row)
+                del user_data['password']
+                return user_data
+                
+        return None
     
     def create_user(self, username: str, password: str, full_name: str, 
                    role: str = 'user', created_by: int = None) -> int:
         """Create new user"""
         conn = self._get_connection()
         cursor = conn.cursor()
+        
+        # Hash password before storage
+        hashed_pwd = self.hash_password(password)
+        
         cursor.execute("""
             INSERT INTO users (username, password, full_name, role, created_by)
             VALUES (?, ?, ?, ?, ?)
-        """, (username, password, full_name, role, created_by))
+        """, (username, hashed_pwd, full_name, role, created_by))
         conn.commit()
         return cursor.lastrowid
     
@@ -690,11 +758,30 @@ class DatabaseManager:
         conn = self._get_connection()
         cursor = conn.cursor()
         
-        # Generate numero
+        # Generate numero safe against deletions
+        # Query the latest number for this year to ensure uniqueness
         cursor.execute("""
-            SELECT COUNT(*) FROM receptions WHERE annee = ?
+            SELECT MAX(numero) FROM receptions WHERE annee = ?
         """, (annee,))
-        count = cursor.fetchone()[0] + 1
+        result = cursor.fetchone()
+        
+        if result and result[0]:
+            # Parse the last number (Format: BR-XXXX-YEAR)
+            last_code = result[0]
+            try:
+                # Split by '-' and take the middle part
+                parts = last_code.split('-')
+                if len(parts) >= 3:
+                     last_seq = int(parts[1])
+                     count = last_seq + 1
+                else:
+                     # Fallback if format is weird
+                     count = 1
+            except ValueError:
+                count = 1
+        else:
+            count = 1
+            
         numero = f"BR-{count:04d}-{annee}"
         
         ecart = quantite_recue - quantite_annoncee
@@ -782,12 +869,12 @@ class DatabaseManager:
             INSERT INTO factures (numero, type_document, annee, date_facture, client_id, 
              facture_origine_id, motif, type_vente, mode_paiement, 
              ref_paiement, banque, date_paiement, statut_facture, contract_id, 
-             chauffeur, matricule_tracteur, matricule_remorque, transporteur, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             chauffeur, matricule_tracteur, matricule_remorque, transporteur, created_by, etat_paiement)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (numero, type_document, annee, date_facture, client_id,
               facture_origine_id, motif, type_vente, mode_paiement,
               ref_paiement, banque, date_paiement, statut_facture, contract_id,
-              chauffeur, matricule_tracteur, matricule_remorque, transporteur, created_by))
+              chauffeur, matricule_tracteur, matricule_remorque, transporteur, created_by, etat_paiement))
 
         
         facture_id = cursor.lastrowid
@@ -1022,6 +1109,36 @@ class DatabaseManager:
 
     # ==================== PAYMENT OPERATIONS ====================
     
+    def get_payment_by_id(self, payment_id: int) -> Optional[Dict[str, Any]]:
+        """Get payment by ID"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM paiements WHERE id = ?", (payment_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def delete_payment(self, payment_id: int):
+        """Delete payment"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM paiements WHERE id = ?", (payment_id,))
+        conn.commit()
+
+    def update_payment(self, payment_id: int, date_paiement: str, client_id: int, 
+                       montant: float, mode_paiement: str, reference: str, 
+                       banque: str, contrat_num: str, contrat_debut: str, contrat_fin: str):
+        """Update payment"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE paiements 
+            SET date_paiement=?, client_id=?, montant=?, mode_paiement=?, 
+                reference=?, banque=?, contrat_num=?, contrat_date_debut=?, contrat_date_fin=?
+            WHERE id=?
+        """, (date_paiement, client_id, montant, mode_paiement, reference, 
+              banque, contrat_num, contrat_debut, contrat_fin, payment_id))
+        conn.commit()
+    
     def create_paiement(self, date_paiement: str, client_id: int, 
                        montant: float, mode_paiement: str,
                        facture_id: int = None, reference: str = None,
@@ -1093,7 +1210,8 @@ class DatabaseManager:
     
     def log_stock_movement(self, product_id: int, type_mouvement: str,
                           quantite: float, reference_document: str = None,
-                          document_id: int = None, created_by: int = None):
+                          document_id: int = None, created_by: int = None,
+                          date_mouvement: str = None):
         """Log stock movement"""
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -1119,14 +1237,21 @@ class DatabaseManager:
         stock_avant = result[0] if result and result[0] is not None else 0.0
         stock_apres = stock_avant + quantite
         
+        # If date_mouvement not provided, use existing logic (created_at will be used by DB default if not set? 
+        # No, date_mouvement is new. We should set it to today if None, OR let it be None and DB logic handles?
+        # Better to default to current date if missing to avoid NULLs in new logic.
+        from datetime import datetime
+        if not date_mouvement:
+            date_mouvement = datetime.now().strftime("%Y-%m-%d")
+
         # Log movement
         cursor.execute("""
             INSERT INTO stock_movements 
             (product_id, type_mouvement, quantite, reference_document,
-             document_id, stock_avant, stock_apres, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             document_id, stock_avant, stock_apres, created_by, date_mouvement)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (target_product_id, type_mouvement, quantite, final_ref,
-              document_id, stock_avant, stock_apres, created_by))
+              document_id, stock_avant, stock_apres, created_by, date_mouvement))
         
         # Update product stock
         cursor.execute("""
