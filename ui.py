@@ -26,7 +26,7 @@ try:
 except ImportError:
     DateEntry = None
 
-import os
+import word_exports
 
 def preview_and_print_pdf(filename):
     """Open PDF and ask to print"""
@@ -741,7 +741,13 @@ class ClientsFrame(ttk.Frame):
         
         # Double-click to edit
         self.tree.bind("<Double-Button-1>", self.on_double_click)
-        self.tree.tag_configure('evenrow', background='#546e7a')
+        
+        # Configure Tags for Color Coding
+        self.tree.tag_configure('positive', foreground='#d32f2f') # Red for Positive (Debt)
+        self.tree.tag_configure('zero', foreground='#1976d2')     # Blue for Zero
+        self.tree.tag_configure('negative', foreground='#ff9100') # Orange for Negative (Credit)
+        
+        # self.tree.tag_configure('evenrow', background='#546e7a')
         self.load_data()
         
     def load_data(self):
@@ -752,8 +758,13 @@ class ClientsFrame(ttk.Frame):
         clients = self.app.db.get_all_clients()
         for idx, client in enumerate(clients):
             balance = self.app.logic.calculate_client_balance(client['id'])
+            balance_val = balance['solde']
             
-            tag = 'evenrow' if idx % 2 == 0 else ''
+            tag = 'zero'
+            if balance_val > 0.001:
+                tag = 'positive'
+            elif balance_val < -0.001:
+                tag = 'negative'
             
             self.tree.insert("", tk.END, iid=client['id'], values=(
                 client['id'],
@@ -762,7 +773,7 @@ class ClientsFrame(ttk.Frame):
                 client['nis'],
                 client['nif'],
                 format_currency(client['seuil_credit']),
-                format_currency(balance['solde'])
+                format_currency(balance_val)
             ), tags=(tag,))
     
     
@@ -859,7 +870,7 @@ class ProductsFrame(ttk.Frame):
         vsb = ttk.Scrollbar(table_frame, orient="vertical")
         hsb = ttk.Scrollbar(table_frame, orient="horizontal")
         
-        columns = ("Code", "Désignation", "Unité", "Prix HT", "Stock", "Coût", "TVA", "Réf. Stock")
+        columns = ("Code", "Désignation", "Unité", "Prix HT", "Stock", "Coût", "Total Réceptions", "Total Ventes")
         self.tree = ttk.Treeview(
             table_frame, 
             columns=columns, 
@@ -872,11 +883,20 @@ class ProductsFrame(ttk.Frame):
         hsb.config(command=self.tree.xview)
         
         for col in columns:
-            self.tree.heading(col, text=col)
+            header_anchor = tk.W
+            col_anchor = tk.W
+            
+            # Center align numeric columns as requested
+            if col in ["Unité", "Prix HT", "Stock", "Coût", "Total Réceptions", "Total Ventes"]:
+                header_anchor = tk.CENTER
+                col_anchor = tk.CENTER
+            
+            self.tree.heading(col, text=col, anchor=header_anchor)
             width = 100
             if col == "Désignation": width = 200
-            if col == "Réf. Stock": width = 150
-            self.tree.column(col, width=width)
+            if col == "Total Réceptions": width = 120
+            if col == "Total Ventes": width = 120
+            self.tree.column(col, width=width, anchor=col_anchor)
         
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         hsb.pack(side=tk.BOTTOM, fill=tk.X)
@@ -908,25 +928,18 @@ class ProductsFrame(ttk.Frame):
             self.menu.add_command(label="Supprimer", command=self.delete_product_btn)
         self.tree.bind("<Button-3>", self.show_context_menu)
 
-        self.tree.tag_configure('evenrow', background='#546e7a')
+        # self.tree.tag_configure('evenrow', background='#546e7a')
         self.load_data()
     
     def load_data(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        products = self.app.db.get_all_products()
-        
-        # Pre-fetch all products for name lookup (optimization)
-        product_map = {p['id']: p['nom'] for p in products}
+        # Use the new optimized method with stats
+        products = self.app.db.get_all_products_with_stats()
         
         for idx, p in enumerate(products):
-            ref_stock = "Produit Principal"
-            if p.get('parent_stock_id'):
-                parent_name = product_map.get(p['parent_stock_id'], "Inconnu")
-                ref_stock = f"Variante de : {parent_name}"
-            
-            tag = 'evenrow' if idx % 2 == 0 else ''
+            tag = ''
 
             self.tree.insert("", tk.END, iid=p['id'], values=(
                 p.get('code_produit', ''),
@@ -935,8 +948,8 @@ class ProductsFrame(ttk.Frame):
                 format_currency(p['prix_actuel']),
                 format_quantity(p['stock_actuel'], p['unite']),
                 format_currency(p.get('cout_revient', 0.0)),
-                f"{p.get('tva', 19.0):.2f}%",
-                ref_stock
+                format_quantity(p.get('total_receptions', 0.0), p['unite']),
+                format_quantity(p.get('total_ventes', 0.0), p['unite'])
             ), tags=(tag,))
     
     def add_product(self):
@@ -1047,7 +1060,7 @@ class ReceptionsFrame(ttk.Frame):
         vsb = ttk.Scrollbar(table_frame, orient="vertical")
         hsb = ttk.Scrollbar(table_frame, orient="horizontal")
         
-        columns = ("Numéro", "Date", "Produit", "Chauffeur", "Lieu", "Qté Reçue", "Écart")
+        columns = ("Numéro", "Date", "Produit", "Lieu", "Qté Reçue", "Qté Annoncée", "Écart")
         self.tree = ttk.Treeview(
             table_frame, 
             columns=columns, 
@@ -1064,10 +1077,10 @@ class ReceptionsFrame(ttk.Frame):
         col_widths = {
             "Numéro": 120,
             "Date": 100,
-            "Produit": 350,   # Give more space to product name
-            "Chauffeur": 150,
+            "Produit": 350,
             "Lieu": 100,
             "Qté Reçue": 100,
+            "Qté Annoncée": 100,
             "Écart": 80
         }
         
@@ -1075,7 +1088,7 @@ class ReceptionsFrame(ttk.Frame):
             self.tree.heading(col, text=col)
             # Use defined width or fallback to 100
             width = col_widths.get(col, 100)
-            self.tree.column(col, width=width, anchor=tk.W if col in ["Produit", "Chauffeur"] else tk.CENTER)
+            self.tree.column(col, width=width, anchor=tk.W if col in ["Produit"] else tk.CENTER)
         
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         hsb.pack(side=tk.BOTTOM, fill=tk.X)
@@ -1086,8 +1099,9 @@ class ReceptionsFrame(ttk.Frame):
         self.menu.add_command(label="Modifier", command=self.modify_reception)
         self.menu.add_command(label="Générer PDF", command=self.generate_pdf)
         self.tree.bind("<Button-3>", self.show_context_menu)
-        self.tree.tag_configure('evenrow', background='#546e7a')
+        # self.tree.tag_configure('evenrow', background='#546e7a')
         self.tree.tag_configure('ecart_row', foreground='#d32f2f', font=('Arial', 10, 'bold')) # Red for anomalies
+        self.tree.tag_configure('annulee_row', foreground='#ff9100', font=('Arial', 10, 'bold', 'italic')) # Orange for cancelled
         self.load_data()
 
     def create_filter_bar(self):
@@ -1107,7 +1121,7 @@ class ReceptionsFrame(ttk.Frame):
         add_filter(filter_frame, "Numéro", "numero", width=12)
         add_filter(filter_frame, "Date", "date", width=12)
         add_filter(filter_frame, "Produit", "produit", width=20)
-        add_filter(filter_frame, "Chauffeur", "chauffeur", width=15)
+        # add_filter(filter_frame, "Chauffeur", "chauffeur", width=15)
         add_filter(filter_frame, "Lieu", "lieu", width=12)
         
         # Clear button
@@ -1128,7 +1142,7 @@ class ReceptionsFrame(ttk.Frame):
         f_num = self.filters['numero'].get().lower()
         f_date = self.filters['date'].get()
         f_prod = self.filters['produit'].get().lower()
-        f_chauf = self.filters['chauffeur'].get().lower()
+        # f_chauf = self.filters['chauffeur'].get().lower()
         f_lieu = self.filters['lieu'].get().lower()
         
         for item in self.tree.get_children():
@@ -1146,12 +1160,16 @@ class ReceptionsFrame(ttk.Frame):
             if f_num and f_num not in r['numero'].lower(): continue
             if f_date and f_date not in date_display: continue
             if f_prod and f_prod not in r['product_nom'].lower(): continue
-            if f_chauf and f_chauf not in r['chauffeur'].lower(): continue
+            # if f_chauf and f_chauf not in r['chauffeur'].lower(): continue
             if f_lieu and f_lieu not in r['lieu_livraison'].lower(): continue
             
             tags = []
-            if len(self.tree.get_children()) % 2 == 0:
-                tags.append('evenrow')
+            
+            # Check for Soft Update (ANNULEE)
+            # We assume 'statut' might not be in older dicts if query didn't fetch it, 
+            # but we updated get_all_receptions to SELECT r.*
+            if r.get('statut') == 'ANNULEE':
+                tags.append('annulee_row')
             
             # Check for Ecart
             try:
@@ -1163,9 +1181,9 @@ class ReceptionsFrame(ttk.Frame):
                 r['numero'],
                 date_display,
                 r['product_nom'],
-                r['chauffeur'],
                 r['lieu_livraison'],
                 format_quantity(r['quantite_recue'], r.get('unite', '')),
+                format_quantity(r['quantite_annoncee'], r.get('unite', '')),
                 format_quantity(r['ecart'], r.get('unite', ''))
             ), tags=tuple(tags))
     
@@ -1226,10 +1244,10 @@ class ReceptionsFrame(ttk.Frame):
             return
             
         reception_id = int(selection[0])
-        if messagebox.askyesno("Confirmation", "Voulez-vous vraiment supprimer cette réception ?\nCette action annulera l'impact sur le stock."):
+        if messagebox.askyesno("Confirmation", "Voulez-vous vraiment ANNULER cette réception ?\nElle sera conservée dans l'historique mais le stock sera régularisé."):
             try:
                 if get_logic().delete_reception(reception_id):
-                    messagebox.showinfo("Succès", "Réception supprimée avec succès")
+                    messagebox.showinfo("Succès", "Réception annulée avec succès")
                     self.load_data()
                 else:
                     messagebox.showerror("Erreur", "Impossible de supprimer la réception")
@@ -1375,7 +1393,7 @@ class InvoicesFrame(ttk.Frame):
         # Menu items will be populated dynamically in show_context_menu
         self.tree.bind("<Button-3>", self.show_context_menu)
 
-        self.tree.tag_configure('evenrow', background='#546e7a')
+        # self.tree.tag_configure('evenrow', background='#546e7a')
         self.tree.tag_configure('avoir_row', foreground='#ff5252') # Dark Red/Orange for dark theme visibility
         self.tree.tag_configure('annulee', foreground='#ff9800', font=('Arial', 9, 'bold')) # Orange Bold for Cancelled
         self.load_data()
@@ -1457,11 +1475,10 @@ class InvoicesFrame(ttk.Frame):
                 linked_ref = f['child_refs']
             
             tags = []
-            if idx % 2 == 0:
-                tags.append('evenrow')
+            # if idx % 2 == 0:
+            #     tags.append('evenrow')
             
-            if idx % 2 == 0:
-                tags.append('evenrow')
+
             
             # Highlight Logic
             # 1. Cancelled (Highest Priority)
@@ -1480,8 +1497,8 @@ class InvoicesFrame(ttk.Frame):
             # Better tags logic for visual striping on Filtered List
             display_idx = len(self.tree.get_children())
             display_tags = []
-            if display_idx % 2 == 0:
-                display_tags.append('evenrow')
+                # if idx % 2 == 0:
+                #     display_tags.append('evenrow')
             
             # Re-apply color tags
             if f.get('statut') == 'ANNULEE' or f.get('statut_facture') == 'Annulée':
@@ -1794,7 +1811,7 @@ class PaymentsFrame(ttk.Frame):
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        self.tree.tag_configure('evenrow', background='#546e7a')
+        # self.tree.tag_configure('evenrow', background='#546e7a')
         self.tree.tag_configure('pending', foreground='#ff9800', font=('Arial', 10, 'bold')) # Orange for Pending
         self.load_data()
         
@@ -1805,8 +1822,8 @@ class PaymentsFrame(ttk.Frame):
         paiements = self.app.db.get_all_paiements()
         for idx, p in enumerate(paiements):
             tags = []
-            if idx % 2 == 0:
-                tags.append('evenrow')
+            # if idx % 2 == 0:
+            #     tags.append('evenrow')
             
             if p['statut'] == 'En attente':
                 tags.append('pending')
@@ -1932,6 +1949,9 @@ class SituationFrame(ttk.Frame):
             tk.Button(self.controls_frame, text="Exporter Situation PDF", bg=ACCENT_COLOR, fg="white", 
                      command=self.export_pdf).pack(side=tk.RIGHT, padx=5)
             
+            tk.Button(self.controls_frame, text="Vers Word", bg="#2b5797", fg="white", 
+                      command=self.export_word).pack(side=tk.RIGHT, padx=5)
+            
         elif mode == "daily_sales":
             tk.Label(self.controls_frame, text="Date:", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
             
@@ -1946,6 +1966,9 @@ class SituationFrame(ttk.Frame):
             
             tk.Button(self.controls_frame, text="Générer Rapport PDF", bg=ACCENT_COLOR, fg="white", 
                      command=self.export_pdf).pack(side=tk.RIGHT, padx=5)
+            
+            tk.Button(self.controls_frame, text="Vers Word", bg="#2b5797", fg="white", 
+                      command=self.export_word).pack(side=tk.RIGHT, padx=5)
             
             # Auto-preview logic? Maybe manual for now. 
             # Or just instructions in text area.
@@ -1968,6 +1991,9 @@ class SituationFrame(ttk.Frame):
             tk.Button(self.controls_frame, text="Générer Rapport (PDF & Excel)", bg=ACCENT_COLOR, fg="white", 
                      command=self.export_pdf).pack(side=tk.RIGHT, padx=5)
             
+            tk.Button(self.controls_frame, text="Vers Word", bg="#2b5797", fg="white", 
+                      command=self.export_word).pack(side=tk.RIGHT, padx=5)
+            
             if hasattr(self, 'info_text'):
                 self.info_text.delete(1.0, tk.END)
                 self.info_text.insert(tk.END, "Génère l'état de consommation (Global) pour la date sélectionnée.\nInclus : Consommation Journalière, Mensuelle et Annuelle.\nValorisation au coût de revient.")
@@ -1985,6 +2011,9 @@ class SituationFrame(ttk.Frame):
             
             tk.Button(self.controls_frame, text="Générer Rapport PDF", bg=ACCENT_COLOR, fg="white", 
                      command=self.export_pdf).pack(side=tk.RIGHT, padx=5)
+            
+            tk.Button(self.controls_frame, text="Vers Word", bg="#2b5797", fg="white", 
+                      command=self.export_word).pack(side=tk.RIGHT, padx=5)
 
             if hasattr(self, 'info_text'):
                 self.info_text.delete(1.0, tk.END)
@@ -2015,6 +2044,8 @@ class SituationFrame(ttk.Frame):
                      command=self.generate_stock_val_excel).pack(side=tk.RIGHT, padx=5)
             tk.Button(self.controls_frame, text="PDF", bg=ACCENT_COLOR, fg="white", 
                      command=self.generate_stock_val_pdf).pack(side=tk.RIGHT, padx=5)
+            tk.Button(self.controls_frame, text="Vers Word", bg="#2b5797", fg="white", 
+                      command=self.export_word).pack(side=tk.RIGHT, padx=5)
             
             if hasattr(self, 'info_text'):
                 self.info_text.delete(1.0, tk.END)
@@ -2035,6 +2066,9 @@ class SituationFrame(ttk.Frame):
             tk.Button(self.controls_frame, text="Générer Rapport PDF", bg=ACCENT_COLOR, fg="white", 
                      command=self.export_pdf).pack(side=tk.RIGHT, padx=5)
             
+            tk.Button(self.controls_frame, text="Vers Word", bg="#2b5797", fg="white", 
+                      command=self.export_word).pack(side=tk.RIGHT, padx=5)
+            
             if hasattr(self, 'info_text'):
                 self.info_text.delete(1.0, tk.END)
                 self.info_text.insert(tk.END, "Génère l'ÉTAT DES MOUVEMENTS DES STOCKS VALORISES pour la journée choisie.\nFormat PDF A4 Paysage. Deux tableaux : Quantités et Valeurs.")
@@ -2053,6 +2087,9 @@ class SituationFrame(ttk.Frame):
             
             tk.Button(self.controls_frame, text="Générer Rapport (PDF & Excel)", bg=ACCENT_COLOR, fg="white", 
                      command=self.export_pdf).pack(side=tk.RIGHT, padx=5)
+            
+            tk.Button(self.controls_frame, text="Vers Word", bg="#2b5797", fg="white", 
+                      command=self.export_word).pack(side=tk.RIGHT, padx=5)
             
             if hasattr(self, 'info_text'):
                 self.info_text.delete(1.0, tk.END)
@@ -2085,6 +2122,9 @@ class SituationFrame(ttk.Frame):
             tk.Label(self.controls_frame, text="Rapport d'analyse des factures annulées", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
             tk.Button(self.controls_frame, text="Afficher l'analyse", bg=SECONDARY_COLOR, fg="white",
                       command=self.load_situation).pack(side=tk.LEFT, padx=5)
+            
+            tk.Button(self.controls_frame, text="Exporter Word", bg="#2b5797", fg="white", 
+                      command=self.export_word).pack(side=tk.LEFT, padx=5)
 
     def load_situation(self, event=None):
         mode = self.mode.get()
@@ -2350,6 +2390,109 @@ class SituationFrame(ttk.Frame):
             except: pass
 
 
+
+    def export_word(self):
+        import word_exports
+        
+        mode = self.mode.get()
+        filename = None
+        
+        try:
+            if mode == "client":
+                selected = self.client_var.get()
+                if not selected:
+                    messagebox.showwarning("Erreur", "Veuillez sélectionner un client")
+                    return
+                client_id = int(selected.split(' - ')[0])
+                client = self.app.db.get_client_by_id(client_id)
+                situation = self.app.logic.get_client_situation(client_id)
+                data = {'client': client, 'balance': situation['balance']}
+                filename = word_exports.generate_situation_word(data)
+
+            elif mode == "daily_sales":
+                if DateEntry and hasattr(self, 'date_entry') and isinstance(self.date_entry, DateEntry):
+                    date_str = self.date_entry.get_date().strftime("%Y-%m-%d")
+                elif hasattr(self, 'date_var'):
+                    date_str = self.date_var.get()
+                else: return
+                
+                try: datetime.strptime(date_str, "%Y-%m-%d")
+                except ValueError: return
+                
+                data = self.app.logic.get_daily_sales_stats(date_str)
+                filename = word_exports.generate_daily_sales_word(data)
+
+            elif mode == "ca_category":
+                start = self.start_date_entry.get()
+                end = self.end_date_entry.get()
+                try:
+                    datetime.strptime(start, "%Y-%m-%d")
+                    datetime.strptime(end, "%Y-%m-%d")
+                except ValueError: return
+                
+                data = self.app.logic.get_sales_by_category(start, end)
+                if not data: return
+                filename = word_exports.generate_sales_by_category_word(data, start, end)
+
+            elif mode == "stock_valuation":
+                 product_sel = self.product_var.get()
+                 if not product_sel: return
+                 product_id = int(product_sel.split(' - ')[0])
+                 start = self.start_date_entry.get()
+                 end = self.end_date_entry.get()
+                 
+                 data = self.app.logic.get_stock_valuation_data(product_id, start, end)
+                 if not data or not data.get('data'): return
+                 filename = word_exports.generate_stock_valuation_word(data)
+
+            elif mode == "global_consumption":
+                 if DateEntry and hasattr(self, 'date_entry') and isinstance(self.date_entry, DateEntry):
+                    date_str = self.date_entry.get_date().strftime("%Y-%m-%d")
+                 elif hasattr(self, 'date_var'):
+                    date_str = self.date_var.get()
+                 else: return
+                 
+                 data = self.app.logic.get_global_consumption_data(date_str)
+                 filename = word_exports.generate_global_consumption_word(data, date_str)
+
+            elif mode == "valorized_movements":
+                 if DateEntry and hasattr(self, 'date_entry') and isinstance(self.date_entry, DateEntry):
+                    date_str = self.date_entry.get_date().strftime("%Y-%m-%d")
+                 elif hasattr(self, 'date_var'):
+                    date_str = self.date_var.get()
+                 else: return
+                 
+                 result = self.app.logic.get_movements_valorises_data(date_str)
+                 filename = word_exports.generate_movements_valorises_word(result, date_str)
+
+            elif mode == "annual_receivables":
+                 if DateEntry and hasattr(self, 'date_entry') and isinstance(self.date_entry, DateEntry):
+                    date_str = self.date_entry.get_date().strftime("%Y-%m-%d")
+                 elif hasattr(self, 'date_var'):
+                    date_str = self.date_var.get()
+                 else: return
+                 
+                 data = self.app.logic.get_annual_receivables_data(date_str)
+                 filename = word_exports.generate_annual_receivables_word(data, date_str)
+
+            elif mode == "cancellations_analysis":
+                 conn = self.app.db._get_connection()
+                 c = conn.cursor()
+                 c.execute("SELECT * FROM journal_annulations ORDER BY date_annulation DESC")
+                 annulations = c.fetchall()
+                 filename = word_exports.generate_cancellations_analysis_word(annulations)
+
+            if filename:
+                 messagebox.showinfo("Succès", f"Export Word effectué :\n{os.path.basename(filename)}")
+                 try: os.startfile(filename)
+                 except: pass
+                 
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("Erreur", f"Erreur lors de l'export Word:\n{str(e)}")
+
+
 # ==================== STOCK FRAME ====================
 
 class StockFrame(ttk.Frame):
@@ -2359,31 +2502,15 @@ class StockFrame(ttk.Frame):
         self._build()
     
     def _build(self):
-        # Create Canvas and Scrollbar
-        canvas = tk.Canvas(self, bg=BG_COLOR)
-        scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
         # Header
-        header = tk.Frame(scrollable_frame, bg=BG_COLOR)
+        header = tk.Frame(self, bg=BG_COLOR)
         header.pack(fill=tk.X, padx=20, pady=10)
         
         tk.Label(header, text="État des Stocks", font=("Arial", 16, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
         tk.Button(header, text="Exporter Excel", bg=ACCENT_COLOR, fg="white", command=self.export_excel).pack(side=tk.RIGHT)
         
         # Table
-        table_frame = tk.Frame(scrollable_frame, bg=BG_COLOR)
+        table_frame = tk.Frame(self, bg=BG_COLOR)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
         vsb = ttk.Scrollbar(table_frame, orient="vertical")
@@ -2416,7 +2543,15 @@ class StockFrame(ttk.Frame):
         hsb.pack(side=tk.BOTTOM, fill=tk.X)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        self.tree.tag_configure('evenrow', background='#546e7a')
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # self.tree.tag_configure('evenrow', background='#546e7a')
+        
+        # Conditional Formatting Tags
+        self.tree.tag_configure('row_pos', foreground='#00e676', font=('Arial', 10, 'bold')) # Green
+        self.tree.tag_configure('row_neg', foreground='#ff1744', font=('Arial', 10, 'bold')) # Red
+        self.tree.tag_configure('row_zero', foreground='#29b6f6', font=('Arial', 10, 'bold')) # Blue
+
         self.load_data()
         
     def load_data(self):
@@ -2428,51 +2563,76 @@ class StockFrame(ttk.Frame):
         # Pre-fetch for parent lookup
         product_map = {p['id']: p for p in products}
         
-        for idx, p in enumerate(products):
-            display_name = p['nom']
-            stock_final = p['stock_actuel']
-            ref_stock = ""
-            
-            # Helper to get effective stock if child
-            if p.get('parent_stock_id'):
-                 # Show parent stock for availability context
-                 parent = product_map.get(p['parent_stock_id'])
-                 if parent:
-                     # stock_final = parent['stock_actuel']  <-- REMOVE OVERRIDE
-                     ref_stock = f"-> {parent['nom']}"
+        try:
+            for idx, p in enumerate(products):
+                display_name = p['nom']
+                # [AMELIORATION] Real-Time Stock Calculation
+                stock_final = self.app.logic.get_real_time_stock(p['id']) # Source of Truth
+                
+                ref_stock = ""
+                if p.get('parent_stock_id'):
+                     parent = product_map.get(p['parent_stock_id'])
+                     if parent:
+                         ref_stock = f"-> {parent['nom']}"
 
-            movements = self.app.db.get_stock_movements(p['id'])
-            # Logic recalculation could be here if needed
-            # For now relying on p['stock_actuel'] as master for "Final"
-            
-            # Simplified Stats:
-            # Init = Final - (In - Out) ==> Init = Final - In + Out
-            # Net Sales = Ventes (negative) + Retours (positive)
-            # We want to display the OUTFLOW. So if we sold 100 (-100) and returned 20 (+20), Net = -80. Display 80.
-            sales_movements = [m['quantite'] for m in movements if m['type_mouvement'] in ['Vente', 'Retour Avoir', 'Annulation Facture']]
-            net_sales = sum(sales_movements)
-            total_out = abs(net_sales) # Sum of Vente+Avoir should be negative (net outflow), or 0 if balanced.
-            
-            # Receptions only
-            reception_movements = [m['quantite'] for m in movements if m['type_mouvement'] in ['Réception', 'Annulation Réception']]
-            total_in = sum(reception_movements)
-            
-            # Logic tweak: if parent stock management, stock_initial might be misleading if just calc from movements
-            # But let's show visual calc:
-            stock_initial = stock_final - total_in + total_out
-            
-            tag = 'evenrow' if idx % 2 == 0 else ''
-            
-            self.tree.insert("", tk.END, values=(
-                p.get('code_produit', ''),
-                display_name,
-                p['unite'],
-                format_quantity(stock_initial, p['unite']),
-                format_quantity(total_in, p['unite']),
-                format_quantity(total_out, p['unite']),
-                format_quantity(stock_final, p['unite']),
-                ref_stock
-            ), tags=(tag,))
+                movements = self.app.db.get_stock_movements(p['id'])
+                
+                # Calculate Flow from Movements
+                total_in = 0.0
+                total_out = 0.0
+                
+                for m in movements:
+                    # Logic: Entrées (+), Sorties (-)
+                    # Réception: +
+                    # Vente: -
+                    # Correction (+): +
+                    # Correction (-): -
+                    # Inventaire (+): +
+                    # Inventaire (-): -
+                    
+                    qty = float(m['quantite'])
+                    typ = m['type_mouvement']
+                    
+                    if typ in ['Réception', 'Correction (+)', 'Inventaire (+)']:
+                        total_in += qty
+                    elif typ in ['Vente', 'Correction (-)', 'Inventaire (-)']:
+                        # [FIX] Consommation/Vente should be displayed as positive quantity in the "Out" column
+                        total_out += abs(qty)
+                    
+                    # Note: If 'Annulation' flows are present, they should reverse. 
+                    # Assuming logic handles signs correctly or they are removed.
+                    # For simplicity in this display:
+                    
+                # Reconstruct Initial Stock for Display Consistency
+                # Final = Initial + Net_Change
+                # Net_Change = Total_In - Total_Out (since Total_Out is now positive magnitude)
+                # So Initial = Final - (Total_In - Total_Out)
+                stock_initial = stock_final - (total_in - total_out)
+                
+                # Color code
+                if stock_final > 0:
+                    tag = 'row_pos'
+                elif stock_final < 0:
+                    tag = 'row_neg'
+                else:
+                    tag = 'row_zero'
+                    
+                self.tree.insert("", "end", values=(
+                    p.get('code_produit', ''),     # Code
+                    display_name,                  # Designation
+                    p['unite'],                    # Unite
+                    format_quantity(stock_initial, p['unite']), # Stock Initial
+                    format_quantity(total_in, p['unite']),      # Receptions (+)
+                    format_quantity(total_out, p['unite']),     # Ventes (-)
+                    format_quantity(stock_final, p['unite']),   # Stock Final
+                    ref_stock                      # Ref Stock
+                ), tags=(tag,))
+                
+        except Exception as e:
+            import traceback
+            err = traceback.format_exc()
+            messagebox.showerror("Erreur Chargement Stock", f"Détails:\n{err}")
+            print(err)
 
     def export_excel(self):
         products = self.app.db.get_all_products()
@@ -4756,6 +4916,11 @@ class InvoiceDialog:
             qte = parse_currency(qte_str)
             price = parse_currency(price_str)
             
+            # [AMELIORATION] Prevent 0 Quantity (Request Step 73)
+            if qte <= 0:
+                messagebox.showerror("Erreur", "La quantité ne peut pas être nulle ou négative.")
+                return
+            
             # Update price logic
             # if abs(price - self.selected_product['prix_actuel']) > 0.01:
             #     if messagebox.askyesno("Mise à jour Prix", "Le prix a changé. Voulez-vous mettre à jour le prix du produit dans la base ?"):
@@ -4869,6 +5034,17 @@ class InvoiceDialog:
                 return
             client_id = int(client_str.split(' - ')[0])
             
+            # [AMELIORATION] Prevent saving empty invoice or 0 total (Request Step 140)
+            if not self.lignes:
+                messagebox.showerror("Erreur", "Impossible d'enregistrer une facture sans lignes.")
+                return
+            
+            # Check Total
+            total_ht = sum(l['quantite'] * l['prix_unitaire'] for l in self.lignes)
+            if total_ht <= 0.001:
+                messagebox.showerror("Erreur", "Le montant total de la facture ne peut pas être 0.")
+                return
+
             origin_id = self.facture_origine_id
             if self.type_doc == 'Avoir' and not origin_id:
                 # Try to resolve from entry if not passed directly
@@ -6124,7 +6300,7 @@ class AboutDialog:
         lbl_text = tk.Label(
             container,
             text=("Développé par : Mr Oulmi Abdeldjallil\n"
-                  "en collaboration avec Mr Boullala Rabah\n"
+                  "N° Tel: 0554 15 57 37. E-mail: djalleloulmi1@gmail.com\n"
                   "pour l'ECDE OUED SMAR"),
             font=("Arial", 14, "bold"),
             fg="#2e7d32", # Green

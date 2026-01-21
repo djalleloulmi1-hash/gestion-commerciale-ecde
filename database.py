@@ -98,6 +98,7 @@ MASTER_SCHEMA = {
         "date_bt": "TEXT",
         "num_facture": "TEXT",
         "date_fact": "TEXT",
+        "statut": "TEXT DEFAULT 'VALIDE'",
         "created_by": "INTEGER REFERENCES users(id)",
         "created_at": "TEXT DEFAULT CURRENT_TIMESTAMP"
     },
@@ -259,8 +260,9 @@ class DatabaseManager:
             
         self.connection: Optional[sqlite3.Connection] = None
         
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        # Ensure directory exists (only if not in-memory)
+        if self.db_path != ":memory:":
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         
         # Start Self-Healing Process
         self.verifier_et_reparer_base_de_donnees()
@@ -493,6 +495,14 @@ class DatabaseManager:
         """, (user_id, username, action, details))
         conn.commit()
     
+    def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Get user by ID"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, username, full_name, role FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
     # ==================== CLIENT OPERATIONS ====================
     
     def create_client(self, raison_sociale: str, adresse: str, rc: str, nis: str,
@@ -677,6 +687,39 @@ class DatabaseManager:
         cursor.execute("SELECT * FROM products WHERE id = ?", (product_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
+    
+    def get_all_products_with_stats(self) -> List[Dict[str, Any]]:
+        """
+        Get all products with calculated statistics:
+        - Total Receptions (sum of quantite_recue from receptions)
+        - Total Sales (sum of quantite from lignes_facture for non-cancelled invoices)
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        query = """
+            SELECT p.*,
+                   COALESCE(r.total_receptions, 0) as total_receptions,
+                   COALESCE(v.total_ventes, 0) as total_ventes
+            FROM products p
+            LEFT JOIN (
+                SELECT product_id, SUM(quantite_recue) as total_receptions
+                FROM receptions
+                WHERE statut != 'ANNULEE'
+                GROUP BY product_id
+            ) r ON p.id = r.product_id
+            LEFT JOIN (
+                SELECT lf.product_id, SUM(lf.quantite) as total_ventes
+                FROM lignes_facture lf
+                JOIN factures f ON lf.facture_id = f.id
+                WHERE f.statut != 'ANNULEE'
+                GROUP BY lf.product_id
+            ) v ON p.id = v.product_id
+            WHERE p.active = 1
+            ORDER BY p.nom
+        """
+        cursor.execute(query)
+        return [dict(row) for row in cursor.fetchall()]
     
     def update_product_price(self, product_id: int, nouveau_prix: float, 
                            reference_note: str = None, date_note: str = None,

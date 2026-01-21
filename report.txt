@@ -1,0 +1,91 @@
+Product Found: ID=38, Name='CEMII A-L 42.5 N VRAC'
+Stock Initial: 0.0, Stock Actuel (in DB): 160.0
+--------------------------------------------------
+
+--- Stock Movements Table ---
+ID    | Date/Time            | Type                 | Ref             | Qty        | Run. Stock
+------------------------------------------------------------------------------------------
+40    | 2026-01-10           | Réception            | BL BR-0001-2026 | 40.00      | 40.00     
+41    | 2026-01-10           | Réception            | BL BR-0002-2026 | 40.00      | 80.00     
+42    | 2026-01-10           | Réception            | BL BR-0003-2026 | 40.00      | 120.00    
+43    | 2026-01-10           | Vente                | Fact FAC-0001-2026 | -40.00     | 80.00     
+44    | 2026-01-10           | Vente                | Fact FAC-0002-2026 | -40.00     | 40.00     
+45    | 2026-01-10           | Vente                | Fact FAC-0003-2026 | -40.00     | 0.00      
+46    | 2026-01-11           | Réception            | BL BR-0004-2026 | 40.00      | 40.00     
+47    | 2026-01-11           | Réception            | BL BR-0006-2026 | 40.00      | 80.00     
+48    | 2026-01-11           | Réception            | BL BR-0007-2026 | 40.00      | 120.00    
+49    | 2026-01-11           | Réception            | BL BR-0008-2026 | 40.00      | 160.00    
+50    | 2026-01-11           | Réception            | BL BR-0009-2026 | 40.00      | 200.00    
+51    | 2026-01-11           | Réception            | BL BR-0010-2026 | 40.00      | 240.00    
+52    | 2026-01-11           | Vente                | Fact FAC-0004-2026 | -40.00     | 200.00    
+53    | 2026-01-11           | Vente                | Fact FAC-0005-2026 | -40.00     | 160.00    
+54    | 2026-01-11           | Vente                | Fact FAC-0006-2026 | -40.00     | 120.00    
+55    | 2026-01-11           | Vente                | Fact FAC-0007-2026 | -40.00     | 80.00     
+56    | 2026-01-11           | Vente                | Fact FAC-0008-2026 | -40.00     | 40.00     
+57    | 2026-01-11           | Vente                | Fact FAC-0009-2026 | -40.00     | 0.00      
+58    | 2026-01-12           | Vente                | Fact FAC-0010-2026 | -40.00     | -40.00    
+59    | 2026-01-12           | Vente                | Fact FAC-0011-2026 | -40.00     | -80.00    
+61    | 2026-01-12           | Vente                | Fact FAC-0014-2026 | -40.00     | -120.00   
+62    | 2026-01-13           | Vente                | Fact FAC-0015-2026 | -40.00     | -160.00   
+67    | 2026-01-12           | Réception            | BR-0012-2026    | 120.00     | -40.00    
+68    | 2026-01-13           | Réception            | BR-0013-2026    | 40.00      | 0.00      
+71    | 2026-01-14           | Réception            | BR-0015-2026    | 200.00     | 200.00    
+72    | 2026-01-15           | Vente                | FAC-0016-2026   | -40.00     | 160.00    
+73    | 2026-01-15           | Vente                | FAC-0017-2026   | -40.00     | 120.00    
+74    | 2026-01-15           | Vente                | FAC-0018-2026   | -40.00     | 80.00     
+75    | 2026-01-15           | Vente                | FAC-0019-2026   | -40.00     | 40.00     
+76    | 2026-01-15           | Vente                | FAC-0020-2026   | -40.00     | 0.00      
+77    | 2026-01-15           | Réception            | BR-0016-2026    | 200.00     | 200.00    
+78    | 2026-01-18           | Vente                | FAC-0021-2026   | -40.00     | 160.00    
+------------------------------------------------------------------------------------------
+Calculated Final Stock based on Movements: 160.0
+Discrepancy: 0.0
+
+--- Receptions (Source of Truth for Inflows) ---
+Reception BR-0001-2026 (ID: 1) - Date: 2026-01-10 - Qty: 40.0 - Add to Stock
+Reception BR-0002-2026 (ID: 2) - Date: 2026-01-10 - Qty: 40.0 - Add to Stock
+Reception BR-0003-2026 (ID: 3) - Date: 2026-01-10 - Qty: 40.0 - Add to Stock
+Reception BR-0004-2026 (ID: 4) - Date: 2026-01-11 - Qty: 40.0 - Add to Stock
+Reception BR-0006-2026 (ID: 6) - Date: 2026-01-11 - Qty: 40.0 - Add to Stock
+Reception BR-0007-2026 (ID: 7) - Date: 2026-01-11 - Qty: 40.0 - Add to Stock
+Reception BR-0008-2026 (ID: 8) - Date: 2026-01-11 - Qty: 40.0 - Add to Stock
+Reception BR-0009-2026 (ID: 9) - Date: 2026-01-11 - Qty: 40.0 - Add to Stock
+Reception BR-0010-2026 (ID: 10) - Date: 2026-01-11 - Qty: 40.0 - Add to Stock
+Reception BR-0012-2026 (ID: 20) - Date: 2026-01-12 - Qty: 120.0 - Add to Stock
+Reception BR-0013-2026 (ID: 21) - Date: 2026-01-13 - Qty: 40.0 - Add to Stock
+Reception BR-0015-2026 (ID: 23) - Date: 2026-01-14 - Qty: 200.0 - Add to Stock
+Reception BR-0011-2026 (ID: 24) - ANNULEE - Qty: 200.0 (Ignored)
+Reception BR-0016-2026 (ID: 25) - Date: 2026-01-15 - Qty: 200.0 - Add to Stock
+Total Valid Receptions: 920.0
+
+--- Sales (Source of Truth for Outflows) ---
+Facture FAC-0001-2026 (ID: 1) - Date: 2026-01-10 - Qty: 40.0 - Subtract Stock
+Facture FAC-0002-2026 (ID: 2) - Date: 2026-01-10 - Qty: 40.0 - Subtract Stock
+Facture FAC-0003-2026 (ID: 3) - Date: 2026-01-10 - Qty: 40.0 - Subtract Stock
+Facture FAC-0004-2026 (ID: 4) - Date: 2026-01-11 - Qty: 40.0 - Subtract Stock
+Facture FAC-0005-2026 (ID: 5) - Date: 2026-01-11 - Qty: 40.0 - Subtract Stock
+Facture FAC-0006-2026 (ID: 6) - Date: 2026-01-11 - Qty: 40.0 - Subtract Stock
+Facture FAC-0007-2026 (ID: 7) - Date: 2026-01-11 - Qty: 40.0 - Subtract Stock
+Facture FAC-0008-2026 (ID: 8) - Date: 2026-01-11 - Qty: 40.0 - Subtract Stock
+Facture FAC-0009-2026 (ID: 9) - Date: 2026-01-11 - Qty: 40.0 - Subtract Stock
+Facture FAC-0010-2026 (ID: 14) - Date: 2026-01-12 - Qty: 40.0 - Subtract Stock
+Facture FAC-0011-2026 (ID: 15) - Date: 2026-01-12 - Qty: 40.0 - Subtract Stock
+Facture FAC-0014-2026 (ID: 18) - Date: 2026-01-12 - Qty: 40.0 - Subtract Stock
+Facture FAC-0015-2026 (ID: 19) - Date: 2026-01-13 - Qty: 40.0 - Subtract Stock
+Facture FAC-0016-2026 (ID: 21) - Date: 2026-01-14 - Qty: 40.0 - Subtract Stock
+Facture FAC-0017-2026 (ID: 22) - Date: 2026-01-14 - Qty: 40.0 - Subtract Stock
+Facture FAC-0018-2026 (ID: 23) - Date: 2026-01-14 - Qty: 40.0 - Subtract Stock
+Facture FAC-0019-2026 (ID: 24) - Date: 2026-01-14 - Qty: 40.0 - Subtract Stock
+Facture FAC-0020-2026 (ID: 25) - Date: 2026-01-14 - Qty: 40.0 - Subtract Stock
+Facture FAC-0021-2026 (ID: 26) - Date: 2026-01-15 - Qty: 40.0 - Subtract Stock
+Total Sold: 760.0
+Total Returned: 0
+
+--- Final Verification ---
+Stock Initial: 0.0
+Total In (Receptions): +920.0
+Total Out (Sales): -760.0
+Total Returns (Avoirs): +0
+Theoretical Stock: 160.0
+Stock Actuel in Product Table: 160.0
+Stock Calculated from Movements History: 160.0

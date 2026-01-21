@@ -9,8 +9,33 @@ try:
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import cm
+    from reportlab.pdfgen import canvas
 except ImportError:
     print("Missing dependencies: openpyxl or reportlab")
+
+class NumberedCanvas(canvas.Canvas):
+    def __init__(self, *args, **kwargs):
+        canvas.Canvas.__init__(self, *args, **kwargs)
+        self._saved_page_states = []
+
+    def showPage(self):
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        """add page info to each page (page x of y)"""
+        num_pages = len(self._saved_page_states)
+        for state in self._saved_page_states:
+            self.__dict__.update(state)
+            self.draw_page_number(num_pages)
+            canvas.Canvas.showPage(self)
+        canvas.Canvas.save(self)
+
+    def draw_page_number(self, page_count):
+        self.setFont("Helvetica", 9)
+        width, height = self._pagesize
+        self.drawCentredString(width / 2.0, 0.7 * cm,
+                               "Page %d / %d" % (self._pageNumber, page_count))
 
 def format_currency(value):
     return f"{value:,.2f} DA".replace(",", " ").replace(".", ",")
@@ -517,35 +542,59 @@ def generate_movements_valorises_pdf(date_str, output_path=None):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = f"Etat_Mouvements_Stocks_Valorises_{date_str}_{timestamp}.pdf"
 
+    # Increased topMargin to accommodate fixed header
     doc = SimpleDocTemplate(output_path, pagesize=landscape(A4),
                             rightMargin=0.5*cm, leftMargin=0.5*cm,
-                            topMargin=0.5*cm, bottomMargin=0.5*cm)
+                            topMargin=3.5*cm, bottomMargin=1.5*cm) 
     
     elements = []
     styles = getSampleStyleSheet()
     
-    # Logo Check
-    from utils import check_logo_exists
-    if check_logo_exists():
-        try:
-            from reportlab.platypus import Image as RLImage
-            im = RLImage("logo_gica.png", width=4*cm, height=2*cm)
-            im.hAlign = 'LEFT'
-            elements.append(im)
-        except: pass
+    # Define Header Drawing Function
+    def draw_header(canvas, doc):
+        canvas.saveState()
         
-    title_style = styles['Heading1']
-    title_style.alignment = 1 # Center
-    
-    date_fmt = datetime.strptime(date_str, '%Y-%m-%d').strftime('%d/%m/%Y')
-    title = Paragraph(f"ETAT DES MOUVEMENTS DES STOCKS VALORISES - JOURNEE DU {date_fmt}", title_style)
-    elements.append(title)
-    elements.append(Spacer(1, 0.2*cm)) # Reduced spacing
+        # 1. Logo
+        from utils import check_logo_exists
+        if check_logo_exists():
+            try:
+                # Draw Image directly on canvas
+                # Top-Left corner validation
+                logo_path = "logo_gica.png"
+                img_width = 4*cm
+                img_height = 2*cm
+                # Position: Left margin, Top of page - margin + buffer ?? 
+                # Actually, canvas (0,0) is bottom-left. 
+                # Top of page is A4[1] (height).
+                page_width, page_height = landscape(A4)
+                
+                x_pos = 0.5 * cm # Left margin
+                y_pos = page_height - 0.5*cm - img_height # Top margin area
+                
+                canvas.drawImage(logo_path, x_pos, y_pos, width=img_width, height=img_height, preserveAspectRatio=True, mask='auto')
+            except Exception as e:
+                print(f"Error drawing logo: {e}")
+
+        # 2. Title
+        title_style = styles['Heading1']
+        title_style.alignment = 1 # Center
+        date_fmt = datetime.strptime(date_str, '%Y-%m-%d').strftime('%d/%m/%Y')
+        title_text = f"ETAT DES MOUVEMENTS DES STOCKS VALORISES - JOURNEE DU {date_fmt}"
+        
+        # Draw string centered
+        canvas.setFont('Helvetica-Bold', 14)
+        page_width, page_height = landscape(A4)
+        text_width = canvas.stringWidth(title_text, 'Helvetica-Bold', 14)
+        canvas.drawString((page_width - text_width) / 2.0, page_height - 2*cm, title_text)
+        
+        canvas.restoreState()
+
+    # REMOVED: Flowable Logo and Title from 'elements'
     
     # TABLE 1: QUANTITIES
     p_style = ParagraphStyle('Bold', parent=styles['Normal'], fontName='Helvetica-Bold', alignment=1)
     elements.append(Paragraph("TABLEAU 1: QUANTITES", p_style))
-    elements.append(Spacer(1, 0.1*cm)) # Reduced spacing
+    elements.append(Spacer(1, 0.2*cm))
     
     # Headers
     h1 = ["Désignation", "U", "JOURNEE", "", "", "MOIS", "", "", "ANNEE", "", "", "STOCK FINAL"]
@@ -597,6 +646,7 @@ def generate_movements_valorises_pdf(date_str, output_path=None):
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('ALIGN', (0,2), (0,-2), 'LEFT'), # Products left align (exclude header/total)
+        ('WORDWRAP', (0,0), (-1,-1), 'CJK'), # Allow wrapping
         
         # Merges
         ('SPAN', (0,0), (0,1)), # Des
@@ -618,11 +668,11 @@ def generate_movements_valorises_pdf(date_str, output_path=None):
     
     t1.setStyle(TableStyle(base_styles + cond_styles))
     elements.append(t1)
-    elements.append(Spacer(1, 0.5*cm)) # Reduced spacing from 1cm
+    elements.append(Spacer(1, 0.5*cm))
     
     # TABLE 2: VALUES
     elements.append(Paragraph("TABLEAU 2: VALEURS (DA)", p_style))
-    elements.append(Spacer(1, 0.1*cm)) # Reduced spacing
+    elements.append(Spacer(1, 0.2*cm))
     
     # Same Header Structure but for values
     h1_v = ["Désignation", "Cout U.", "JOURNEE", "", "", "MOIS", "", "", "ANNEE", "", "", "VAL. FINALE"]
@@ -681,7 +731,7 @@ def generate_movements_valorises_pdf(date_str, output_path=None):
     
     t2.setStyle(TableStyle(base_styles + cond_styles_v)) # Reuse base style
     elements.append(t2)
-    elements.append(Spacer(1, 0.5*cm)) # Reduced spacing from 1cm
+    elements.append(Spacer(1, 0.5*cm))
     
     # Signature Blocks
     sig_data = [
@@ -699,7 +749,8 @@ def generate_movements_valorises_pdf(date_str, output_path=None):
     
     elements.append(t_sig)
     
-    doc.build(elements)
+    # Use NumberedCanvas for Page X / Y AND draw_header for repeating header
+    doc.build(elements, onFirstPage=draw_header, onLaterPages=draw_header, canvasmaker=NumberedCanvas)
     return output_path
 
 def generate_annual_receivables_excel(data, date_n, output_path=None):

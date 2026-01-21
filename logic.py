@@ -88,79 +88,74 @@ class BusinessLogic:
     
     def revert_reception_stock_impact(self, reception_id: int) -> bool:
         """
-        Revert stock impact for a reception (undo +Qty).
-        Used before updating a reception to ensure clean state.
+        Revert stock impact by finding the actual movement in history.
+        This is more robust than checking the reception 'lieu' which might have changed.
         """
         conn = self.db._get_connection()
         cursor = conn.cursor()
         
-        # Get reception details
-        cursor.execute("SELECT lieu_livraison, product_id, quantite_recue FROM receptions WHERE id = ?", (reception_id,))
-        reception = cursor.fetchone()
-        
-        if not reception:
+        try:
+            # Find the movement associated with this reception
+            cursor.execute("""
+                SELECT id, product_id, quantite 
+                FROM stock_movements 
+                WHERE document_id = ? AND type_mouvement = 'Réception'
+            """, (reception_id,))
+            movements = cursor.fetchall()
+            
+            for mv in movements:
+                mv_id, pid, qty = mv
+                # Revert stock (Subtract the quantity that was added)
+                # Note: qty in movement is what was added. So we subtract it.
+                cursor.execute("UPDATE products SET stock_actuel = stock_actuel - ? WHERE id = ?", (qty, pid))
+                
+                # Delete the movement
+                cursor.execute("DELETE FROM stock_movements WHERE id = ?", (mv_id,))
+                
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            print(f"Error reverting reception: {e}")
             return False
-            
-        lieu, product_id, quantite = reception
-        
-        if lieu == 'Sur Stock':
-            try:
-                # Reverse stock level (Subtract the quantity that was added)
-                cursor.execute("UPDATE products SET stock_actuel = stock_actuel - ? WHERE id = ?", (quantite, product_id))
-            
-                # Delete the specific 'Réception' movement
-                cursor.execute("DELETE FROM stock_movements WHERE document_id = ? AND type_mouvement = 'Réception'", (reception_id,))
-                
-                conn.commit()
-                return True
-            except Exception as e:
-                conn.rollback()
-                return False
-                
-        return True
 
     def delete_reception(self, reception_id: int) -> bool:
         """
-        Delete reception and reverse stock movement if applicable.
-        Strategy: Hard Delete / Undo.
-        1. Revert stock quantity physically.
-        2. Delete the associated stock movement.
-        3. Delete the reception record.
+        Soft Delete reception:
+        1. Clean up ANY stock movements linked to this reception (Robust fix).
+        2. Set reception status to 'ANNULEE'.
         """
         conn = self.db._get_connection()
         cursor = conn.cursor()
-        
-        # Get reception details
-        cursor.execute("SELECT lieu_livraison, product_id, quantite_recue, numero FROM receptions WHERE id = ?", (reception_id,))
-        reception = cursor.fetchone()
-        
-        if not reception:
-            return False
-            
-        lieu, product_id, quantite, numero = reception
         
         try:
             conn.execute("BEGIN TRANSACTION")
             
-            if lieu == 'Sur Stock':
-                # 1. Reverse stock level physically
-                # Since we are deleting the +Q movement, we must subtract Q from current stock
-                # to align with the removal of the history.
-                cursor.execute("UPDATE products SET stock_actuel = stock_actuel - ? WHERE id = ?", (quantite, product_id))
+            # 1. Robust Revert based on Movements existence
+            cursor.execute("""
+                SELECT id, product_id, quantite 
+                FROM stock_movements 
+                WHERE document_id = ? AND type_mouvement = 'Réception'
+            """, (reception_id,))
+            movements = cursor.fetchall()
             
-                # 2. Delete all stock movements related to this reception
-                cursor.execute("DELETE FROM stock_movements WHERE document_id = ? AND type_mouvement = 'Réception'", (reception_id,))
-                
-                # Also delete any 'Annulation' artifacts if they exist (cleanup from previous bugs)
-                cursor.execute("DELETE FROM stock_movements WHERE document_id = ? AND type_mouvement = 'Annulation Réception'", (reception_id,))
+            for mv in movements:
+                mv_id, pid, qty = mv
+                # Revert stock physically
+                cursor.execute("UPDATE products SET stock_actuel = stock_actuel - ? WHERE id = ?", (qty, pid))
+                # Delete movement
+                cursor.execute("DELETE FROM stock_movements WHERE id = ?", (mv_id,))
             
-            # 3. Delete reception
-            cursor.execute("DELETE FROM receptions WHERE id = ?", (reception_id,))
+            # Clean up duplicates or anomalies if any
+            cursor.execute("DELETE FROM stock_movements WHERE document_id = ? AND type_mouvement = 'Réception'", (reception_id,))
+            
+            # 2. Soft Delete: Mark as ANNULEE
+            cursor.execute("UPDATE receptions SET statut = 'ANNULEE' WHERE id = ?", (reception_id,))
             
             conn.commit()
             return True
             
-        except Exception:
+        except Exception as e:
             conn.rollback()
             return False
 
@@ -1554,6 +1549,39 @@ class BusinessLogic:
             })
         
         return report
+
+    def get_real_time_stock(self, product_id: int) -> float:
+        """
+        Calculate stock from movements history (Real-Time Source of Truth).
+        Auto-Heal: Updates products.stock_actuel if discrepancy found.
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        
+        # 0. Get Initial Stock
+        cursor.execute("SELECT stock_initial FROM products WHERE id = ?", (product_id,))
+        row = cursor.fetchone()
+        base_stock = row[0] if row and row[0] else 0.0
+
+        # 1. Calculate from Movements
+        cursor.execute("SELECT SUM(quantite) FROM stock_movements WHERE product_id = ?", (product_id,))
+        res = cursor.fetchone()
+        movements_sum = res[0] if res and res[0] else 0.0
+        
+        calc_stock = base_stock + movements_sum
+        
+        # 2. Check Cache (products table)
+        cursor.execute("SELECT stock_actuel FROM products WHERE id = ?", (product_id,))
+        res_prod = cursor.fetchone()
+        current_cache = res_prod[0] if res_prod else 0.0
+        
+        # 3. Auto-Heal if needed
+        if abs(calc_stock - current_cache) > 0.001:
+            print(f"[Logic] Stock Mismatch for P{product_id}: Cache={current_cache}, Real={calc_stock}. Fixing...")
+            cursor.execute("UPDATE products SET stock_actuel = ? WHERE id = ?", (calc_stock, product_id))
+            conn.commit()
+            
+        return calc_stock
 
     def get_daily_sales_stats(self, report_date: str) -> Dict[str, Any]:
         """
