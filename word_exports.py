@@ -1147,3 +1147,175 @@ def generate_cancellations_analysis_word(annulations):
     filename = os.path.join(directory, f"Analyse_Annulations_{timestamp}.docx")
     doc.save(filename)
     return filename
+
+def generate_grand_livre_word(data, period):
+    """
+    Grand Livre Détaillé des Opérations Clients.
+    One section per client.
+    Table: DATE | REF | LIBELLE | DEBIT | CREDIT | SOLDE
+    """
+    doc = create_base_document(landscape=True) # Landscape for more width
+    
+    start_date = period['start']
+    end_date = period['end']
+    
+    add_header(doc, "GRAND-LIVRE DÉTAILLÉ DES OPÉRATIONS CLIENTS", 
+              date_str=f"SITUATION DU {datetime.strptime(start_date, '%Y-%m-%d').strftime('%d/%m/%Y')} AU {datetime.strptime(end_date, '%Y-%m-%d').strftime('%d/%m/%Y')}", 
+              landscape=True)
+    
+    doc.add_paragraph()
+    
+    # Check if empty
+    if not data:
+        doc.add_paragraph("Aucune donnée trouvée pour la période sélectionnée.")
+    
+    for client_data in data:
+        client = client_data['client']
+        
+        # Header for Client
+        # Using a Paragraph with Shading? Or simple Bold text
+        p = doc.add_paragraph()
+        run = p.add_run(f"CLIENT: {client['raison_sociale']} ({client['code_client'] or 'N/A'})")
+        run.bold = True
+        run.font.size = Pt(12)
+        run.font.color.rgb = RGBColor(0, 51, 102) # Dark Blue
+        
+        # Table
+        # Cols: Date(2.5), Ref(2.5), Libelle(10), Debit(3), Credit(3), Solde(3) ~ 24cm
+        headers = ["DATE", "RÉF", "LIBELLÉ DE L'ÉCRITURE", "DÉBIT", "CRÉDIT", "SOLDE"]
+        
+        table = doc.add_table(rows=1, cols=6)
+        style_table(table)
+        table.autofit = False
+        
+        # Header Row
+        hr = table.rows[0]
+        set_repeat_table_header(hr)
+        
+        for i, h in enumerate(headers):
+            hr.cells[i].text = h
+            hr.cells[i].paragraphs[0].runs[0].bold = True
+            hr.cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            set_cell_background(hr.cells[i], "D3D3D3")
+            
+        # Widths
+        widths = [Cm(2.5), Cm(2.5), Cm(10.0), Cm(3.0), Cm(3.0), Cm(3.0)]
+        for i, w in enumerate(widths):
+            table.columns[i].width = w
+            
+        # 1. Initial Balance Row
+        r_init = table.add_row()
+        r_init.cells[0].text = datetime.strptime(start_date, '%Y-%m-%d').strftime('%d/%m/%Y')
+        r_init.cells[2].text = "SOLDE INITIAL AU DÉBUT DE PÉRIODE"
+        r_init.cells[2].paragraphs[0].runs[0].bold = True
+        
+        init_bal = client_data['initial_balance']
+        
+        # If Initial Balance 
+        # < 0 (Debt) -> Black (Default)
+        # > 0 (Advance) -> Blue
+        r_init.cells[5].text = format_currency(init_bal)
+        if init_bal > 0.001: 
+             r_init.cells[5].paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 0, 255) # Blue
+        else:
+             r_init.cells[5].paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 0, 0) # Black
+        
+        set_cell_background(r_init.cells[2], "F0F0F0")
+        
+        # 2. Movements
+        for mv in client_data['movements']:
+            tr = table.add_row()
+            cells = tr.cells
+            
+            # Date
+            try:
+                d_fmt = datetime.strptime(mv['date'], '%Y-%m-%d').strftime('%d/%m/%Y')
+            except: d_fmt = mv['date']
+            cells[0].text = d_fmt
+            
+            # Ref
+            cells[1].text = str(mv['ref'])
+            
+            # Libelle
+            cells[2].text = mv['libelle']
+            
+            # Debit / Credit
+            if mv['debit'] != 0:
+                cells[3].text = format_currency(mv['debit'])
+            else:
+                cells[3].text = "-"
+                
+            if mv['credit'] != 0:
+                cells[4].text = format_currency(mv['credit'])
+            else:
+                cells[4].text = "-"
+                
+            # Solde Progressif
+            cells[5].text = format_currency(mv['solde_progressif'])
+            
+            # Styling
+            # Align Numbers
+            for idx in [3, 4, 5]:
+                 cells[idx].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            
+            # Formatting Cancelled
+            if mv.get('is_cancelled'):
+                # Orange & Bold for specific cells or whole row?
+                # "Les factures Annulées doivent rester en Orange... avec affichage du Motif"
+                for c in cells:
+                    p = c.paragraphs[0]
+                    if len(p.runs) == 0: p.add_run(c.text) # Refresh runs
+                    for run in p.runs:
+                        run.font.color.rgb = RGBColor(255, 140, 0) # Orange
+                        run.bold = True
+            else:
+                # Color Solde
+                try:
+                    val = float(mv['solde_progressif'])
+                    if val > 0.001: # Advance
+                        cells[5].paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 0, 255) # Blue
+                    else:
+                        cells[5].paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 0, 0) # Black
+                except: pass
+
+        # 3. Total Period Row
+        r_tot = table.add_row()
+        r_tot.cells[2].text = "TOTAUX PÉRIODE"
+        r_tot.cells[2].paragraphs[0].runs[0].bold = True
+        r_tot.cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
+        r_tot.cells[3].text = format_currency(client_data['total_debit'])
+        r_tot.cells[4].text = format_currency(client_data['total_credit'])
+        
+        r_tot.cells[3].paragraphs[0].runs[0].bold = True
+        r_tot.cells[4].paragraphs[0].runs[0].bold = True
+        r_tot.cells[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        r_tot.cells[4].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
+        set_cell_background(r_tot.cells[3], "E0E0E0")
+        set_cell_background(r_tot.cells[4], "E0E0E0")
+        
+        # 4. Final Balance Row
+        r_fin = table.add_row()
+        r_fin.cells[2].text = "SOLDE FINAL AU " + datetime.strptime(end_date, '%Y-%m-%d').strftime('%d/%m/%Y')
+        r_fin.cells[2].paragraphs[0].runs[0].bold = True
+        r_fin.cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
+        fin_bal = client_data['final_balance']
+        r_fin.cells[5].text = format_currency(fin_bal)
+        if len(r_fin.cells[5].paragraphs[0].runs) > 0:
+             r_fin.cells[5].paragraphs[0].runs[0].bold = True
+             if fin_bal > 0.001: # Advance
+                 r_fin.cells[5].paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 0, 255) # Blue
+             else:
+                 r_fin.cells[5].paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 0, 0) # Black
+        
+        set_cell_background(r_fin.cells[5], "FFE599") # Light Orange/Yellow highlight
+             
+        doc.add_page_break()
+        
+    directory = ensure_export_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = os.path.join(directory, f"Grand_Livre_{start_date}_{end_date}_{timestamp}.docx")
+    doc.save(filename)
+    return filename

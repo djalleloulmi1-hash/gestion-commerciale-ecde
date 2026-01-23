@@ -42,7 +42,15 @@ def preview_and_print_pdf(filename):
             except Exception as e:
                 messagebox.showerror("Erreur d'impression", f"Impossible d'imprimer :\n{e}")
     except Exception as e:
+
         messagebox.showerror("Erreur", f"Erreur lors de l'ouverture du PDF :\n{e}")
+
+def ensure_pdf_export_dir():
+    """Ensure Exports_PDF directory exists and return it"""
+    directory = "Exports_PDF"
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    return directory
 
 # Color scheme
 PRIMARY_COLOR = "#1a237e"
@@ -205,6 +213,8 @@ class MainApplication:
             config_menu.add_command(label="Export Miroir (Directeur)", command=self.export_miroir)
             config_menu.add_separator()
             config_menu.add_command(label="Clôture Annuelle", command=self.show_closure)
+            config_menu.add_separator()
+            config_menu.add_command(label="Journal", command=self.open_journal)
             config_menu.add_separator()
             config_menu.add_command(label="Remise à zéro", command=self.reset_application_data)
             config_menu.add_separator()
@@ -421,6 +431,13 @@ class MainApplication:
         except Exception as e:
             messagebox.showerror("Erreur", f"Une erreur est survenue lors de la réinitialisation :\n{str(e)}")
     
+    def open_journal(self):
+        """Open Audit Log Journal"""
+        if self.user.get('role') != 'admin':
+             messagebox.showerror("Accès Refusé", "Réservé aux administrateurs.")
+             return
+        JournalDialog(self.root, self.user['id'])
+
     def show_about(self):
         AboutDialog(self.root)
 
@@ -805,6 +822,9 @@ class ClientsFrame(ttk.Frame):
         c.execute("UPDATE clients SET active=0 WHERE id=?", (client_id,))
         conn.commit()
         
+        # Log action
+        self.app.db.log_action(self.app.user['id'], "DELETE_CLIENT", f"Suppression client ID: {client_id} ({item['values'][1]})")
+        
         self.load_data()
         self.load_data()
         messagebox.showinfo("Succès", "Client supprimé")
@@ -973,6 +993,7 @@ class ProductsFrame(ttk.Frame):
             try:
                 product_id = int(selection[0])
                 self.app.db.delete_product(product_id)
+                self.app.db.log_action(self.app.user['id'], "DELETE_PRODUCT", f"Deleted Product ID: {product_id}")
                 self.load_data()
                 messagebox.showinfo("Succès", "Produit supprimé")
             except Exception as e:
@@ -1248,6 +1269,7 @@ class ReceptionsFrame(ttk.Frame):
             try:
                 if get_logic().delete_reception(reception_id):
                     messagebox.showinfo("Succès", "Réception annulée avec succès")
+                    self.app.db.log_action(self.app.user['id'], "DELETE_RECEPTION", f"Annulation Réception ID: {reception_id}")
                     self.load_data()
                 else:
                     messagebox.showerror("Erreur", "Impossible de supprimer la réception")
@@ -1550,7 +1572,8 @@ class InvoicesFrame(ttk.Frame):
         facture_data = self.app.db.get_facture_by_id(facture_id)
         
         if facture_data:
-            filename = f"{facture_data['numero']}.pdf"
+            pdf_dir = ensure_pdf_export_dir()
+            filename = os.path.join(pdf_dir, f"{facture_data['numero']}.pdf")
             generate_invoice_pdf(facture_data, filename)
             preview_and_print_pdf(filename)
     
@@ -1583,7 +1606,8 @@ class InvoicesFrame(ttk.Frame):
         facture_data = self.app.db.get_facture_by_id(facture_id)
         
         if facture_data:
-            filename = f"{facture_data['numero']}.pdf"
+            pdf_dir = ensure_pdf_export_dir()
+            filename = os.path.join(pdf_dir, f"{facture_data['numero']}.pdf")
             generate_invoice_pdf(facture_data, filename)
             preview_and_print_pdf(filename)
     
@@ -1862,6 +1886,7 @@ class PaymentsFrame(ttk.Frame):
         payment_id = int(selection[0])
         try:
             self.app.db.delete_payment(payment_id)
+            self.app.db.log_action(self.app.user['id'], "DELETE_PAYMENT", f"Deleted Payment {payment_id}")
             messagebox.showinfo("Succès", "Paiement supprimé")
             self.load_data()
         except Exception as e:
@@ -1917,6 +1942,9 @@ class SituationFrame(ttk.Frame):
         
         tk.Radiobutton(mode_frame_2, text="Analyse des Annulations", variable=self.mode, 
                       value="cancellations_analysis", command=self.update_ui, bg="orange", fg="black", selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
+
+        tk.Radiobutton(mode_frame_2, text="Grand-Livre Détaillé", variable=self.mode, 
+                      value="grand_livre", command=self.update_ui, bg=BG_COLOR, fg=TEXT_COLOR, selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
         
         # Controls Frame (Dynamic)
         self.controls_frame = tk.Frame(self, bg=BG_COLOR)
@@ -1974,7 +2002,49 @@ class SituationFrame(ttk.Frame):
             # Or just instructions in text area.
             if hasattr(self, 'info_text'):
                 self.info_text.delete(1.0, tk.END)
-                self.info_text.insert(tk.END, "Sélectionnez une date et cliquez sur 'Générer Rapport PDF' pour voir l'état journalier des ventes.")
+                self.info_text.insert(tk.END, "Veuillez sélectionner une date pour le rapport journalier.")
+
+        elif mode == "grand_livre":
+            tk.Label(self.controls_frame, text="Client (Optionnel):", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            self.client_gl_var = tk.StringVar()
+            self.client_gl_combo = ttk.Combobox(self.controls_frame, textvariable=self.client_gl_var, width=25)
+            
+            # Fetch clients for combo
+            clients = self.app.db.get_all_clients(active_only=True)
+            client_list = ["Tous les clients"] + [f"{c['id']} - {c['raison_sociale']}" for c in clients]
+            self.client_gl_combo['values'] = client_list
+            self.client_gl_combo.current(0)
+            self.client_gl_combo.pack(side=tk.LEFT, padx=5)
+
+            tk.Label(self.controls_frame, text="Période du:", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            
+            if DateEntry:
+                self.start_date_entry = DateEntry(self.controls_frame, width=12, background='darkblue',
+                                                foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
+            else:
+                self.start_date_var = tk.StringVar(value=f"{datetime.now().year}-01-01")
+                self.start_date_entry = tk.Entry(self.controls_frame, textvariable=self.start_date_var, width=12)
+            self.start_date_entry.pack(side=tk.LEFT, padx=5)
+            
+            tk.Label(self.controls_frame, text="au:", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            
+            if DateEntry:
+                self.end_date_entry = DateEntry(self.controls_frame, width=12, background='darkblue',
+                                              foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
+            else:
+                self.end_date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+                self.end_date_entry = tk.Entry(self.controls_frame, textvariable=self.end_date_var, width=12)
+            self.end_date_entry.pack(side=tk.LEFT, padx=5)
+            
+            tk.Button(self.controls_frame, text="Générer PDF", bg=ACCENT_COLOR, fg="white", 
+                     command=self.export_pdf).pack(side=tk.RIGHT, padx=5)
+            
+            tk.Button(self.controls_frame, text="Vers Word", bg="#2b5797", fg="white", 
+                      command=self.export_word).pack(side=tk.RIGHT, padx=5)
+                      
+            if hasattr(self, 'info_text'):
+                self.info_text.delete(1.0, tk.END)
+                self.info_text.insert(tk.END, "Sélectionnez une période pour générer le Grand-Livre Détaillé.\nCe rapport affiche l'ensemble des opérations (Factures, Paiements) par client avec solde progressif.")
 
         elif mode == "global_consumption":
             tk.Label(self.controls_frame, text="Arrêté au :", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
@@ -2251,7 +2321,10 @@ class SituationFrame(ttk.Frame):
                 
                 # Generate both
                 excel_path = generate_annual_receivables_excel(data, date_str)
-                pdf_path = generate_annual_receivables_pdf(data, date_str)
+                pdf_dir = ensure_pdf_export_dir()
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                pdf_filename = os.path.join(pdf_dir, f"Etat_Creances_Annuelles_{date_str}_{timestamp}.pdf")
+                pdf_path = generate_annual_receivables_pdf(data, date_str, output_path=pdf_filename)
                 
                 messagebox.showinfo("Succès", f"Rapports générés :\n- {os.path.basename(excel_path)}\n- {os.path.basename(pdf_path)}")
                 preview_and_print_pdf(pdf_path)
@@ -2273,7 +2346,8 @@ class SituationFrame(ttk.Frame):
             client = self.app.db.get_client_by_id(client_id)
             situation = self.app.logic.get_client_situation(client_id)
             
-            filename = f"Situation_Client_{client_id}_{datetime.now().strftime('%Y%m%d')}.pdf"
+            pdf_dir = ensure_pdf_export_dir()
+            filename = os.path.join(pdf_dir, f"Situation_Client_{client_id}_{datetime.now().strftime('%Y%m%d')}.pdf")
             generate_situation_pdf(client, situation, filename)
             try: os.startfile(filename)
             except: pass
@@ -2293,7 +2367,8 @@ class SituationFrame(ttk.Frame):
                 return
                 
             data = self.app.logic.get_daily_sales_stats(date_str)
-            filename = f"Etat_Vente_{date_str}.pdf"
+            pdf_dir = ensure_pdf_export_dir()
+            filename = os.path.join(pdf_dir, f"Etat_Vente_{date_str}.pdf")
             generate_daily_sales_pdf(data, filename)
             try: os.startfile(filename)
             except: pass
@@ -2315,7 +2390,8 @@ class SituationFrame(ttk.Frame):
                     messagebox.showinfo("Information", "Aucune donnée pour cette période.")
                     return
                     
-                filename = f"Etat_CA_Famille_{start}_{end}.pdf"
+                pdf_dir = ensure_pdf_export_dir()
+                filename = os.path.join(pdf_dir, f"Etat_CA_Famille_{start}_{end}.pdf")
                 generate_sales_by_category_pdf(data, start, end, filename)
                 preview_and_print_pdf(filename)
             except Exception as e:
@@ -2342,12 +2418,57 @@ class SituationFrame(ttk.Frame):
             try:
                 # Generate both
                 excel_path = generate_global_consumption_excel(date_str)
-                pdf_path = generate_global_consumption_pdf(date_str)
+                pdf_dir = ensure_pdf_export_dir()
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                # Force filename
+                pdf_filename = os.path.join(pdf_dir, f"Etat_Conso_Global_{date_str}_{timestamp}.pdf")
+                pdf_path = generate_global_consumption_pdf(date_str, output_path=pdf_filename)
                 
                 messagebox.showinfo("Succès", f"Rapports générés :\n- {os.path.basename(excel_path)}\n- {os.path.basename(pdf_path)}")
                 preview_and_print_pdf(pdf_path)
             except Exception as e:
                 messagebox.showerror("Erreur", f"Erreur lors de la génération :\n{e}")
+
+        elif mode == "grand_livre":
+             from reports import generate_grand_livre_pdf
+             
+             # Retrieve dates
+             if hasattr(self, 'start_date_entry') and hasattr(self, 'end_date_entry'):
+                 if DateEntry and isinstance(self.start_date_entry, DateEntry):
+                     start = self.start_date_entry.get_date().strftime("%Y-%m-%d")
+                     end = self.end_date_entry.get_date().strftime("%Y-%m-%d")
+                 else:
+                     start = self.start_date_entry.get()
+                     end = self.end_date_entry.get()
+                 
+                 try:
+                     datetime.strptime(start, "%Y-%m-%d")
+                     datetime.strptime(end, "%Y-%m-%d")
+                 except ValueError:
+                     messagebox.showerror("Erreur", "Format de date invalide")
+                     return
+                 
+                 client_id = None
+                 if hasattr(self, 'client_gl_var'):
+                     sel = self.client_gl_var.get()
+                     if sel and sel != "Tous les clients":
+                         try: client_id = int(sel.split(' - ')[0])
+                         except: pass
+                 
+                 data = self.app.logic.get_grand_livre_data(start, end, client_id=client_id)
+                 if not data:
+                      messagebox.showinfo("Information", "Aucune donnée pour cette période.")
+                      return
+
+                 try:
+                     pdf_path = generate_grand_livre_pdf(data, {'start': start, 'end': end})
+                     messagebox.showinfo("Succès", f"Grand Livre généré :\n- {os.path.basename(pdf_path)}")
+                     preview_and_print_pdf(pdf_path)
+                 except Exception as e:
+                     messagebox.showerror("Erreur PDF", f"Erreur lors de la génération: {str(e)}")
+                     print(f"DEBUG ERROR: {e}")
+             else:
+                 return
 
     def generate_stock_val_excel(self):
         self._generate_stock_report("excel")
@@ -2384,7 +2505,8 @@ class SituationFrame(ttk.Frame):
             try: os.startfile(filename)
             except: pass
         else:
-            filename = f"Etat_Stock_Valorise_{product_id}_{timestamp}.pdf"
+            pdf_dir = ensure_pdf_export_dir()
+            filename = os.path.join(pdf_dir, f"Etat_Stock_Valorise_{product_id}_{timestamp}.pdf")
             generate_stock_valuation_pdf(data, filename)
             try: os.startfile(filename)
             except: pass
@@ -2481,6 +2603,35 @@ class SituationFrame(ttk.Frame):
                  c.execute("SELECT * FROM journal_annulations ORDER BY date_annulation DESC")
                  annulations = c.fetchall()
                  filename = word_exports.generate_cancellations_analysis_word(annulations)
+
+            elif mode == "grand_livre":
+                 # Retrieve dates
+                 if hasattr(self, 'start_date_entry') and hasattr(self, 'start_date_entry'):
+                     if DateEntry and isinstance(self.start_date_entry, DateEntry):
+                         start = self.start_date_entry.get_date().strftime("%Y-%m-%d")
+                         end = self.end_date_entry.get_date().strftime("%Y-%m-%d")
+                     else:
+                         start = self.start_date_entry.get()
+                         end = self.end_date_entry.get()
+                     
+                     try:
+                         datetime.strptime(start, "%Y-%m-%d")
+                         datetime.strptime(end, "%Y-%m-%d")
+                     except ValueError:
+                         messagebox.showerror("Erreur", "Format de date invalide")
+                         return
+                     
+                     client_id = None
+                     if hasattr(self, 'client_gl_var'):
+                         sel = self.client_gl_var.get()
+                         if sel and sel != "Tous les clients":
+                             try: client_id = int(sel.split(' - ')[0])
+                             except: pass
+
+                     data = self.app.logic.get_grand_livre_data(start, end, client_id=client_id)
+                     filename = word_exports.generate_grand_livre_word(data, {'start': start, 'end': end})
+                 else:
+                     return
 
             if filename:
                  messagebox.showinfo("Succès", f"Export Word effectué :\n{os.path.basename(filename)}")
@@ -3755,7 +3906,8 @@ class ReceptionDialog:
                      # 2. Apply new stock impact
                      # Now that DB has new values, process_reception will read them and apply correct movement
                      get_logic().process_reception(self.reception_id, self.user_id)
-                     
+                     get_db().log_action(self.user_id, "UPDATE_RECEPTION", f"Updated Reception {self.reception_id}")
+                      
                 except Exception as ex:
                      messagebox.showerror("Erreur SQL", str(ex))
                      return
@@ -3784,6 +3936,7 @@ class ReceptionDialog:
                  )
                  
                  get_logic().process_reception(rid, self.user_id)
+                 get_db().log_action(self.user_id, "CREATE_RECEPTION", f"Created Reception {rid}")
 
             product_name = self.designation.get()
             unite = self.unite_var.get()
@@ -4322,6 +4475,7 @@ class InvoiceDialog:
             try:
                 success, msg = self.app.logic.annuler_facture(self.view_facture_id, self.app.user['id'], motif)
                 if success:
+                    self.app.db.log_action(self.app.user['id'], "CANCEL_INVOICE", f"Cancelled Invoice {self.view_facture_id}. Motif: {motif}")
                     messagebox.showinfo("Succès", msg, parent=dialog)
                     dialog.destroy()
                     self.dialog.destroy()
@@ -5204,7 +5358,8 @@ class InvoiceDialog:
              try:
                  fac = self.app.db.get_facture_by_id(self.saved_facture_id)
                  from utils import generate_invoice_pdf
-                 filename = f"{fac['type_document']}_{fac['numero']}.pdf"
+                 pdf_dir = ensure_pdf_export_dir()
+                 filename = os.path.join(pdf_dir, f"{fac['type_document']}_{fac['numero']}.pdf")
                  generate_invoice_pdf(fac, filename)
                  preview_and_print_pdf(filename)
              except Exception as e:
@@ -5450,8 +5605,10 @@ class PaymentDialog:
 
             if self.payment_id:
                 self.app.db.update_payment(self.payment_id, date_paiement, client_id, montant, mode, ref, banque, c_num, c_debut, c_fin)
+                self.app.db.log_action(self.app.user['id'], "UPDATE_PAYMENT", f"Updated Payment {self.payment_id}: {montant} DA")
             else:
-                self.app.db.create_paiement(date_paiement, client_id, montant, mode, self.facture_id, ref, banque, c_num, c_debut, c_fin, self.app.user['id'])
+                pid = self.app.db.create_paiement(date_paiement, client_id, montant, mode, self.facture_id, ref, banque, c_num, c_debut, c_fin, self.app.user['id'])
+                self.app.db.log_action(self.app.user['id'], "CREATE_PAYMENT", f"Created Payment {pid}: {montant} DA")
             
             if self.callback: self.callback()
             self.dialog.destroy()
@@ -5560,7 +5717,9 @@ class BordereauDialog:
                     # at the top of your file if they are not already.
                     import utils # Placeholder, replace with actual import if needed
                     from utils import preview_and_print_pdf # Placeholder
-                    pdf_file = utils.generate_bordereau_pdf(data)
+                    pdf_dir = ensure_pdf_export_dir()
+                    filename = os.path.join(pdf_dir, f"Bordereau_{data['numero']}.pdf")
+                    pdf_file = utils.generate_bordereau_pdf(data, paiements, filename)
                     preview_and_print_pdf(pdf_file)
             except Exception as e:
                 messagebox.showerror("Erreur PDF", f"Erreur génération PDF: {e}")
@@ -5795,7 +5954,10 @@ class ClientStateDialog:
                 ))
                 
     def print_pdf(self):
-        filename = f"Etat_Clients_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pdf_dir = ensure_pdf_export_dir()
+        filename = os.path.join(pdf_dir, f"Etat_Clients_{timestamp}.pdf")
+        
         utils.generate_client_state_pdf(self.clients, filename)
         # messagebox.showinfo("Succès", f"PDF généré: {filename}")
         try:
@@ -5909,7 +6071,10 @@ class InvoiceStateDialog:
         tk.Label(footer, text=f"{total_ht:,.2f} DA", font=("Arial", 12, "bold"), fg=ACCENT_COLOR, bg=BG_COLOR).pack(side=tk.RIGHT)
 
     def print_pdf(self):
-        filename = f"Etat_Factures_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pdf_dir = ensure_pdf_export_dir()
+        filename = os.path.join(pdf_dir, f"Etat_Factures_{timestamp}.pdf")
+        
         utils.generate_invoice_state_pdf(self.lines, self.date_range, filename)
         # messagebox.showinfo("Succès", f"PDF généré: {filename}")
         try:
@@ -5997,7 +6162,10 @@ class Etat104Dialog:
         tk.Label(footer, text=f"{total_ca:,.2f} DA", font=("Arial", 12, "bold"), fg=ACCENT_COLOR, bg=BG_COLOR).pack(side=tk.RIGHT)
 
     def print_pdf(self):
-        filename = f"Etat_104_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pdf_dir = ensure_pdf_export_dir()
+        filename = os.path.join(pdf_dir, f"Etat_104_{timestamp}.pdf")
+        
         utils.generate_etat_104_pdf(self.data, self.date_range, filename)
         # messagebox.showinfo("Succès", f"PDF généré: {filename}")
         try:
@@ -6082,7 +6250,10 @@ class PaymentsStateDialog:
         tk.Label(footer, text=f"{total_paiements:,.2f} DA", font=("Arial", 12, "bold"), fg=ACCENT_COLOR, bg=BG_COLOR).pack(side=tk.RIGHT)
 
     def print_pdf(self):
-        filename = f"Etat_Paiements_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pdf_dir = ensure_pdf_export_dir()
+        filename = os.path.join(pdf_dir, f"Etat_Paiements_{timestamp}.pdf")
+        
         utils.generate_payments_state_pdf(self.data, self.date_range, filename)
         # messagebox.showinfo("Succès", f"PDF généré: {filename}")
         try:
@@ -6311,3 +6482,173 @@ class AboutDialog:
         lbl_text.pack(pady=20)
         
         tk.Button(container, text="Fermer", command=self.dialog.destroy, bg="#757575", fg="white", font=("Arial", 10)).pack(pady=(20,0))
+
+
+class JournalDialog:
+    def __init__(self, parent, user_id):
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Journal des Actions")
+        self.dialog.state('zoomed')
+        self.user_id = user_id
+        self.app_db = get_db()
+        self._build()
+        self.load_data()
+
+    def _build(self):
+        # Header
+        header = tk.Frame(self.dialog, bg=BG_COLOR, padx=20, pady=10)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="Journal des Actions (Audit Log)", font=("Arial", 16, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
+        
+        # Filters
+        filter_frame = tk.LabelFrame(self.dialog, text="Filtres", padx=10, pady=10)
+        filter_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        # Date Range
+        tk.Label(filter_frame, text="Période :").pack(side=tk.LEFT, padx=5)
+        
+        import datetime
+        now = datetime.datetime.now()
+        start_of_year = datetime.date(now.year, 1, 1)
+        end_of_year = datetime.date(now.year, 12, 31)
+
+        if DateEntry:
+            self.start_date = DateEntry(filter_frame, width=12, date_pattern='yyyy-mm-dd')
+            self.start_date.set_date(start_of_year)
+            self.end_date = DateEntry(filter_frame, width=12, date_pattern='yyyy-mm-dd')
+            self.end_date.set_date(end_of_year)
+        else:
+            self.start_date = tk.Entry(filter_frame, width=15)
+            self.start_date.insert(0, start_of_year.strftime("%Y-%m-%d"))
+            self.end_date = tk.Entry(filter_frame, width=15)
+            self.end_date.insert(0, end_of_year.strftime("%Y-%m-%d"))
+            
+        self.start_date.pack(side=tk.LEFT, padx=5)
+        tk.Label(filter_frame, text="au").pack(side=tk.LEFT, padx=5)
+        self.end_date.pack(side=tk.LEFT, padx=5)
+        
+        # Action Type Filter
+        tk.Label(filter_frame, text="| Type d'Action :").pack(side=tk.LEFT, padx=10)
+        self.action_var = tk.StringVar(value="All")
+        
+        tk.Radiobutton(filter_frame, text="Tout", variable=self.action_var, value="All", command=self.load_data).pack(side=tk.LEFT, padx=5)
+        tk.Radiobutton(filter_frame, text="Créations", variable=self.action_var, value="CREATE", command=self.load_data).pack(side=tk.LEFT, padx=5)
+        tk.Radiobutton(filter_frame, text="Modifications", variable=self.action_var, value="UPDATE", command=self.load_data).pack(side=tk.LEFT, padx=5)
+        tk.Radiobutton(filter_frame, text="Suppressions", variable=self.action_var, value="DELETE", command=self.load_data).pack(side=tk.LEFT, padx=5)
+        
+        # Buttons
+        tk.Button(filter_frame, text="Actualiser", command=self.load_data, bg=SECONDARY_COLOR, fg="white", font=("Arial", 10)).pack(side=tk.LEFT, padx=20)
+        tk.Button(filter_frame, text="Exporter Excel", command=self.export_excel, bg="#2e7d32", fg="white", font=("Arial", 10, "bold")).pack(side=tk.RIGHT, padx=10)
+
+        # Treeview
+        tree_frame = tk.Frame(self.dialog)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        cols = ("ID", "Date & Heure", "Utilisateur", "Action", "Détails")
+        self.tree = ttk.Treeview(tree_frame, columns=cols, show='headings')
+        
+        self.tree.heading("ID", text="ID")
+        self.tree.column("ID", width=50, anchor=tk.CENTER)
+        
+        self.tree.heading("Date & Heure", text="Date & Heure")
+        self.tree.column("Date & Heure", width=150, anchor=tk.CENTER)
+        
+        self.tree.heading("Utilisateur", text="Utilisateur")
+        self.tree.column("Utilisateur", width=150, anchor=tk.W)
+        
+        self.tree.heading("Action", text="Action")
+        self.tree.column("Action", width=150, anchor=tk.CENTER)
+        
+        self.tree.heading("Détails", text="Détails")
+        self.tree.column("Détails", width=600, anchor=tk.W)
+        
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def load_data(self):
+        # Clean tree
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+            
+        # Get params
+        try:
+             if DateEntry and isinstance(self.start_date, DateEntry):
+                 s_date = self.start_date.get_date().strftime("%Y-%m-%d 00:00:00")
+                 e_date = self.end_date.get_date().strftime("%Y-%m-%d 23:59:59")
+             else:
+                 s_date = self.start_date.get() + " 00:00:00"
+                 e_date = self.end_date.get() + " 23:59:59"
+        except:
+             return 
+
+        action_filter = self.action_var.get()
+        
+        # Query
+        try:
+            conn = self.app_db._get_connection()
+            c = conn.cursor()
+            query = "SELECT * FROM audit_logs WHERE timestamp BETWEEN ? AND ?"
+            params = [s_date, e_date]
+            
+            if action_filter != "All":
+                query += " AND action LIKE ?"
+                params.append(f"{action_filter}%")
+            
+            query += " ORDER BY timestamp DESC"
+            c.execute(query, params)
+            rows = c.fetchall()
+            
+            for r in rows:
+                self.tree.insert("", tk.END, values=(
+                    r['id'],
+                    r['timestamp'],
+                    r['username'],
+                    r['action'],
+                    r['details']
+                ))
+        except Exception as e:
+            messagebox.showerror("Erreur", str(e))
+
+    def export_excel(self):
+        try:
+             if DateEntry and isinstance(self.start_date, DateEntry):
+                 s_date = self.start_date.get_date().strftime("%Y-%m-%d 00:00:00")
+                 e_date = self.end_date.get_date().strftime("%Y-%m-%d 23:59:59")
+             else:
+                 s_date = self.start_date.get() + " 00:00:00"
+                 e_date = self.end_date.get() + " 23:59:59"
+        except: return
+
+        action_filter = self.action_var.get()
+        
+        conn = self.app_db._get_connection()
+        c = conn.cursor()
+        query = "SELECT timestamp, username, action, details FROM audit_logs WHERE timestamp BETWEEN ? AND ?"
+        params = [s_date, e_date]
+        if action_filter != "All":
+            query += " AND action LIKE ?"
+            params.append(f"{action_filter}%")
+        query += " ORDER BY timestamp DESC"
+        
+        c.execute(query, params)
+        data = c.fetchall()
+        
+        export_data = [dict(r) for r in data]
+        
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx")],
+            initialfile=f"Journal_Audit_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        )
+        if filename:
+            try:
+                from utils import export_journal_to_excel
+                export_journal_to_excel(export_data, filename)
+                messagebox.showinfo("Succès", "Journal exporté avec succès.")
+            except ImportError:
+                 messagebox.showerror("Erreur", "Module d'export introuvable.")
+            except Exception as e:
+                 messagebox.showerror("Erreur", f"Echec de l'export: {e}")

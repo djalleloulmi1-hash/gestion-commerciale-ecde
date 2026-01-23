@@ -941,3 +941,210 @@ def generate_annual_receivables_pdf(data, date_n, output_path=None):
     
     doc.build(elements)
     return output_path
+
+def generate_grand_livre_pdf(data, period, output_path=None):
+    """
+    Generate Detailed Grand Livre PDF
+    """
+    if output_path is None:
+        if not os.path.exists("Exports_PDF"): os.makedirs("Exports_PDF")
+        output_path = os.path.join("Exports_PDF", f"Grand_Livre_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+        
+    doc = SimpleDocTemplate(output_path, pagesize=landscape(A4),
+                            rightMargin=1*cm, leftMargin=1*cm,
+                            topMargin=1*cm, bottomMargin=1*cm)
+    
+    elements = []
+    
+    from reportlab.platypus import PageBreak, Image as ReportLabImage
+    
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=16,
+        alignment=1, # CENTER
+        spaceAfter=10
+    )
+    subtitle_style = ParagraphStyle(
+        'CustomSubTitle',
+        parent=styles['Normal'],
+        fontSize=12,
+        alignment=1,
+        spaceAfter=20
+    )
+    
+    # Check if data exists
+    if not data:
+        elements.append(Paragraph("Aucune donnée trouvée pour la période.", styles['Normal']))
+        doc.build(elements)
+        return output_path
+
+    # Iterate Clients
+    for idx, client_data in enumerate(data):
+        if idx > 0:
+            elements.append(PageBreak())
+            
+        client = client_data['client']
+        
+        # --- HEADER ---
+        # Logo Logic (Simplified)
+        logo_path = "logo_entete.png" if os.path.exists("logo_entete.png") else "logo.png"
+        if os.path.exists(logo_path):
+            im = ReportLabImage(logo_path, width=4*cm, height=2.5*cm) # Adjust aspect ratio
+            # Use a Table for Header Layout to center Title and align Logo
+            # Col1: Logo, Col2: Title Info
+            start_fmt = datetime.strptime(period['start'], '%Y-%m-%d').strftime('%d/%m/%Y')
+            end_fmt = datetime.strptime(period['end'], '%Y-%m-%d').strftime('%d/%m/%Y')
+            
+            title_text = "<b>GRAND-LIVRE DÉTAILLÉ DES OPÉRATIONS CLIENTS</b>"
+            sub_text = f"SITUATION DU {start_fmt} AU {end_fmt}"
+            
+            header_table_data = [[
+                im, 
+                [Paragraph(title_text, title_style), Paragraph(sub_text, subtitle_style)]
+            ]]
+            
+            t_head = Table(header_table_data, colWidths=[5*cm, 20*cm])
+            t_head.setStyle(TableStyle([
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('ALIGN', (0,0), (0,0), 'LEFT'),
+                ('ALIGN', (1,0), (1,0), 'CENTER'),
+            ]))
+            elements.append(t_head)
+        else:
+            # Text Only Header
+            start_fmt = datetime.strptime(period['start'], '%Y-%m-%d').strftime('%d/%m/%Y')
+            end_fmt = datetime.strptime(period['end'], '%Y-%m-%d').strftime('%d/%m/%Y')
+            elements.append(Paragraph("GRAND-LIVRE DÉTAILLÉ DES OPÉRATIONS CLIENTS", title_style))
+            elements.append(Paragraph(f"SITUATION DU {start_fmt} AU {end_fmt}", subtitle_style))
+            
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Client Info
+        c_info = f"<b>CLIENT: {client['raison_sociale']}</b> ({client['code_client'] or 'N/A'})"
+        elements.append(Paragraph(c_info, styles['Heading2']))
+        elements.append(Spacer(1, 0.3*cm))
+        
+        # --- TABLE DATA ---
+        # Cols: Date, Ref, Libellé, Debit, Credit, Solde
+        # Widths: ~27.7cm available (A4 Landscape 29.7 - 2 margins)
+        # Date(2.5), Ref(2.5), Lib(9.7), Deb(3.5), Cred(3.5), Solde(4) => 25.7 ok
+        col_widths = [2.5*cm, 2.5*cm, 9.7*cm, 3.5*cm, 3.5*cm, 4*cm]
+        headers = ["DATE", "RÉF", "LIBELLÉ", "DÉBIT", "CRÉDIT", "SOLDE"]
+        
+        table_rows = [headers]
+        
+        # Initial Balance
+        s_date = datetime.strptime(period['start'], '%Y-%m-%d').strftime('%d/%m/%Y')
+        init_bal = client_data['initial_balance']
+        table_rows.append([
+            s_date, "-", "SOLDE INITIAL", "", "", format_currency_report(init_bal)
+        ])
+        
+        # Movements
+        for mv in client_data['movements']:
+            # Formatting
+            try: d_str = datetime.strptime(mv['date'], '%Y-%m-%d').strftime('%d/%m/%Y')
+            except: d_str = mv['date']
+            
+            ref = str(mv['ref'])
+            lib = mv['libelle']
+            deb = format_currency_report(mv['debit']) if mv['debit'] != 0 else "-"
+            cred = format_currency_report(mv['credit']) if mv['credit'] != 0 else "-"
+            solde = format_currency_report(mv['solde_progressif'])
+            
+            table_rows.append([d_str, ref, lib, deb, cred, solde])
+            
+        # Totals
+        table_rows.append([
+            "", "", "TOTAUX PÉRIODE", 
+            format_currency_report(client_data['total_debit']), 
+            format_currency_report(client_data['total_credit']), 
+            ""
+        ])
+        
+        # Final
+        e_date = datetime.strptime(period['end'], '%Y-%m-%d').strftime('%d/%m/%Y')
+        fin_bal = client_data['final_balance']
+        table_rows.append([
+            "", "", f"SOLDE FINAL AU {e_date}", 
+            "", "", format_currency_report(fin_bal)
+        ])
+        
+        # Create Table
+        t = Table(table_rows, colWidths=col_widths, repeatRows=1)
+        
+        # Styles
+        tbl_styles = [
+            ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'), # Header Bold
+            ('ALIGN', (0,0), (-1,0), 'CENTER'), # Header Align
+            ('BACKGROUND', (0,0), (-1,0), colors.lightgrey), # Header BG
+            
+            ('FONTSIZE', (0,0), (-1,-1), 8),
+            ('ALIGN', (0,0), (1,-1), 'CENTER'), # Date/Ref Center
+            ('ALIGN', (3,0), (-1,-1), 'RIGHT'), # Numbers Right
+            
+            # Initial Solde Row (Row 1)
+            ('BACKGROUND', (2,1), (2,1), colors.whitesmoke),
+            ('FONTNAME', (2,1), (2,1), 'Helvetica-Bold'),
+            
+            # Totals Row (Second to last)
+            ('BACKGROUND', (2,-2), (4,-2), colors.lightgrey),
+            ('FONTNAME', (2,-2), (4,-2), 'Helvetica-Bold'),
+            
+            # Final Row (Last)
+            ('BACKGROUND', (2,-1), (2,-1), colors.wheat), # Highligh Label
+            ('BACKGROUND', (5,-1), (5,-1), colors.wheat), # Highlight Value
+            ('FONTNAME', (2,-1), (-1,-1), 'Helvetica-Bold'),
+        ]
+        
+        # Conditional Formatting Loop
+        # Row 0 is Header. 
+        # Row 1 is Init.
+        # Rows 2 to (-2) are movements.
+        
+        # We need to map table row index to movement index to check 'is_cancelled'
+        # Table Row i corresponds to movement i-2 (since row 0=Head, row 1=Init)
+        # Length of movements = len(table_rows) - 3 (Head, Init, Totals, Final ... wait 4 rows extra?)
+        # Let's count properly:
+        # Rows: Head(0) -> Init(1) -> Moves(2...N) -> Total(N+1) -> Final(N+2)
+        
+        start_moves = 2
+        moves = client_data['movements']
+        
+        for i, mv in enumerate(moves):
+            row_idx = start_moves + i
+            if mv.get('is_cancelled'):
+                # Orange Text
+                tbl_styles.append(('TEXTCOLOR', (0, row_idx), (-1, row_idx), colors.orange))
+                tbl_styles.append(('FONTNAME', (0, row_idx), (-1, row_idx), 'Helvetica-Bold'))
+                
+            # Solde Color (Positive = Advance = Blue, Negative = Debt = Black)
+            # Solde is Col 5
+            try:
+                val = float(mv['solde_progressif'])
+                if val > 0.001:
+                    tbl_styles.append(('TEXTCOLOR', (5, row_idx), (5, row_idx), colors.blue))
+                else:
+                    # Debt or Zero
+                    if not mv.get('is_cancelled'):
+                        tbl_styles.append(('TEXTCOLOR', (5, row_idx), (5, row_idx), colors.black))
+            except: pass
+            
+        # Final Row Solde Color
+        try:
+            val = float(fin_bal)
+            if val > 0.001: # Advance
+                tbl_styles.append(('TEXTCOLOR', (5, -1), (5, -1), colors.blue))
+            else: # Debt
+                tbl_styles.append(('TEXTCOLOR', (5, -1), (5, -1), colors.black))
+        except: pass
+
+        t.setStyle(TableStyle(tbl_styles))
+        elements.append(t)
+        
+    doc.build(elements, canvasmaker=NumberedCanvas)
+    return output_path
+

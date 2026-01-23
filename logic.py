@@ -2143,6 +2143,243 @@ class BusinessLogic:
             "totals": grand_totals
         }
 
+    def get_grand_livre_data(self, start_date: str, end_date: str) -> Dict[str, Any]:
+        """
+        Get Detailed Grand Livre data for all clients.
+        Structure:
+        [
+          {
+             client: {...},
+             initial_balance: float (Solde at Start Date 00:00),
+             movements: [
+                {date, type, ref, label, debit (achats), credit (paiements), solde_progressif}
+             ],
+             total_debit: float,
+             total_credit: float,
+             final_balance: float
+          }
+        ]
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        
+        # 1. Fetch All Active Clients
+        clients = self.db.get_all_clients(active_only=True)
+        results = []
+        
+    def get_grand_livre_data(self, start_date, end_date, client_id: Optional[int] = None):
+        """
+        Grand Livre Détaillé des Opérations Clients.
+        Filter optional by client_id.
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        
+        # 1. Fetch Clients
+        if client_id:
+            client_data = self.db.get_client_by_id(client_id)
+            clients = [client_data] if client_data else []
+        else:
+            clients = self.db.get_all_clients(active_only=True)
+            
+        results = []
+        
+        for client in clients:
+            cid = client['id']
+            # Initial Balance Calculation at start_date 00:00
+            # User Requirement: DEBT IS NEGATIVE.
+            # Sign: 
+            # Report N-1: Usually stored as Positive Magnitude of Debt. So -Report.
+            # Invoices (Debit): Negative Impact.
+            # Payments (Credit): Positive Impact.
+            
+            report_n_1 = client['report_n_moins_1'] or 0.0
+            
+            cursor.execute("SELECT COALESCE(SUM(montant), 0) FROM paiements WHERE client_id = ? AND date_paiement < ?", (cid, start_date))
+            hist_paiements = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COALESCE(SUM(montant_ttc), 0) FROM factures WHERE client_id = ? AND date_facture < ? AND type_document = 'Facture' AND statut != 'Annulée'", (cid, start_date))
+            hist_factures = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COALESCE(SUM(montant_ttc), 0) FROM factures WHERE client_id = ? AND date_facture < ? AND type_document = 'Avoir' AND statut != 'Annulée'", (cid, start_date))
+            hist_avoirs = cursor.fetchone()[0]
+            
+            # Init = (Report) - Invoices + Payments + Avoirs
+            # Assuming report_n_1 is already signed (Negative = Debt)
+            initial_balance = report_n_1 - hist_factures + hist_paiements + hist_avoirs
+            
+            # 2. Fetch Movements
+            movements = []
+            
+            # Invoices
+            # Fetch type_vente, ref_paiement, and now 'etat_paiement'
+            try:
+                cursor.execute("""
+                    SELECT id, date_facture, numero, type_document, montant_ttc, statut, motif_annulation, type_vente, ref_paiement, etat_paiement 
+                    FROM factures 
+                    WHERE client_id = ? AND date_facture BETWEEN ? AND ?
+                    ORDER BY date_facture, numero
+                """, (cid, start_date, end_date))
+                inv_rows = cursor.fetchall()
+            except sqlite3.OperationalError:
+                # Fallback if columns missing (though we confirmed etat_paiement exists)
+                 cursor.execute("""
+                    SELECT id, date_facture, numero, type_document, montant_ttc, statut, motif_annulation 
+                    FROM factures 
+                    WHERE client_id = ? AND date_facture BETWEEN ? AND ?
+                    ORDER BY date_facture, numero
+                """, (cid, start_date, end_date))
+                 inv_rows = cursor.fetchall()
+            
+            for row in inv_rows:
+                is_cancelled = (row['statut'] == 'ANNULEE' or row['statut'] == 'Annulée')
+                amount = row['montant_ttc']
+                
+                debit = 0.0
+                credit = 0.0
+                
+                # Default values
+                type_doc = row[3] if isinstance(row, tuple) else row['type_document']
+                motif = ""
+                t_vente = ""
+                ref_pay = None
+                etat_paiement = "A Terme" # Default
+
+                try:
+                    # Try accessing by key if Row or Dict
+                    type_doc = row['type_document']
+                    motif = row['motif_annulation']
+                    t_vente = (row['type_vente'] or "").lower()
+                    ref_pay = row['ref_paiement']
+                    
+                    # New: Get etat_paiement
+                    try: etat_paiement = row['etat_paiement']
+                    except: pass
+                except:
+                    # Tuple fallback indices
+                    # 0:id, 1:date, 2:num, 3:type, 4:mont, 5:stat, 6:motif, 7:type_vente, 8:ref, 9:etat_paiement
+                    try:
+                        motif = row[6]
+                        if len(row) > 9:
+                             etat_paiement = row[9]
+                    except: pass
+                
+                # Check for Comptant using etat_paiement
+                # UI Filter uses "Comptant"
+                is_comptant = (str(etat_paiement).strip().lower() == "comptant")
+                
+                # Base Label
+                label = f"{type_doc} N° {row['numero']}"
+                
+                if is_cancelled:
+                    label += f" (ANNULÉE - {motif or 'M.I'})"
+                    debit = 0.0
+                    credit = 0.0
+                else:
+                    if type_doc == 'Facture':
+                        debit = amount
+                        # Dynamic Tagging deferred to processing loop
+                        
+                        if ref_pay:
+                            label += f" Réf Paiement: {ref_pay}"
+                    else:
+                        # Avoir
+                        credit = amount 
+                        label += " (Avoir)"
+                
+                movements.append({
+                    'date': row['date_facture'],
+                    'ref': row['numero'],
+                    'libelle': label,
+                    'debit': debit,   
+                    'credit': credit, 
+                    'is_cancelled': is_cancelled,
+                    'type': 'doc',
+                    'is_comptant': is_comptant,
+                    'is_invoice': (type_doc == 'Facture' and not is_cancelled)
+                })
+                
+            # Payments
+            cursor.execute("""
+                SELECT id, date_paiement, numero, mode_paiement, montant, reference, banque 
+                FROM paiements 
+                WHERE client_id = ? AND date_paiement BETWEEN ? AND ?
+                ORDER BY date_paiement
+            """, (cid, start_date, end_date))
+            pay_rows = cursor.fetchall()
+            
+            for row in pay_rows:
+                label = f"Règlement ({row['mode_paiement']})"
+                if row['reference']: label += f" Réf: {row['reference']}"
+                if row['banque']: label += f" ({row['banque']})"
+                
+                movements.append({
+                    'date': row['date_paiement'],
+                    'ref': row['numero'] or '-', 
+                    'libelle': label,
+                    'debit': 0.0,
+                    'credit': row['montant'],
+                    'is_cancelled': False,
+                    'type': 'pay',
+                    'is_comptant': False,
+                    'is_invoice': False
+                })
+            
+            # Sort
+            movements.sort(key=lambda x: x['date'])
+            
+            # Process Progressive Balance & Final Labels
+            current_balance = initial_balance
+            processed_moves = []
+            
+            total_debit_period = 0.0
+            total_credit_period = 0.0
+            
+            for m in movements:
+                # Store pre-balance to check for "Sur Avance"
+                prev_balance = current_balance
+                
+                # Update Balance (Debt=Negative)
+                # Invoice (Debit) -> Subtract
+                # Payment/Avoir (Credit) -> Add
+                # Formula: Balance = Balance + Credit - Debit
+                current_balance = current_balance + m['credit'] - m['debit']
+                
+                # Logic Libellé (Mutually Exclusive)
+                if m['is_invoice']:
+                    # 1. Check for Explicit "Au Comptant" (sourced from etat_paiement)
+                    if m['is_comptant']:
+                         if "(au comptant)" not in m['libelle']:
+                             m['libelle'] += " (au comptant)"
+                    
+                    # 2. Check for "Sur Avance" (Using existing funds)
+                    # Condition: Not Comptant AND Previous Balance is Positive (Advance)
+                    elif prev_balance > 0.001:
+                        m['libelle'] += " (sur avance)"
+                        
+                    # 3. Default to "A Terme" (Credit Sales)
+                    # Condition: Not Comptant AND Not Sur Avance
+                    else:
+                         m['libelle'] += " (à terme)"
+                
+                m['solde_progressif'] = current_balance
+                processed_moves.append(m)
+                
+                total_debit_period += m['debit']
+                total_credit_period += m['credit']
+            
+            if abs(initial_balance) > 0.001 or len(movements) > 0:
+                results.append({
+                    'client': client,
+                    'initial_balance': initial_balance,
+                    'movements': processed_moves,
+                    'total_debit': total_debit_period,
+                    'total_credit': total_credit_period,
+                    'final_balance': current_balance
+                })
+                
+        return results
+
 # Global business logic instance
 _logic_instance: Optional[BusinessLogic] = None
 

@@ -655,6 +655,53 @@ def export_stock_to_excel(products: List[Dict[str, Any]], filename: str):
     return filename
 
 
+def export_journal_to_excel(data: List[Dict[str, Any]], filename: str):
+    "Export audit journal to Excel"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Journal Audit"
+    
+    # Header style
+    header_fill = PatternFill(start_color="455a64", end_color="455a64", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=12)
+    center_align = Alignment(horizontal="center", vertical="center")
+    
+    # Headers
+    headers = ['Date & Heure', 'Utilisateur', 'Action', 'Détails']
+    ws.append(headers)
+    
+    # Style header row
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = center_align
+    
+    # Data rows
+    for row in data:
+        ws.append([
+            row['timestamp'],
+            row['username'],
+            row['action'],
+            row['details']
+        ])
+    
+    # Auto-adjust column widths
+    for column in ws.columns:
+        max_length = 0
+        column_letter = column[0].column_letter
+        for cell in column:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(cell.value)
+            except:
+                pass
+        adjusted_width = min(max_length + 2, 80)
+        ws.column_dimensions[column_letter].width = adjusted_width
+    
+    wb.save(filename)
+    return filename
+
+
 # ==================== BACKUP ====================
 
 def create_backup(db_path: str = "gestion_commerciale.db"):
