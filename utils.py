@@ -700,6 +700,20 @@ def export_journal_to_excel(data: List[Dict[str, Any]], filename: str):
     
     wb.save(filename)
     return filename
+def ensure_export_dir() -> str:
+    """Ensure generic Exports directory exists and return path."""
+    path = os.path.join(os.path.dirname(__file__), "Exports")
+    if not os.path.exists(path):
+        os.makedirs(path)
+    return path
+
+def ensure_pdf_export_dir() -> str:
+    """Ensure Exports_PDF directory exists."""
+    path = "Exports_PDF"
+    if not os.path.exists(path):
+        os.makedirs(path)
+    return path
+
 
 
 # ==================== BACKUP ====================
@@ -775,6 +789,111 @@ def generate_creances_pdf(data: List[Dict[str, Any]], filename: str):
     c.drawRightString(width - 30, y - 10, f"{total:,.2f} DA")
     
     c.save()
+
+# ==================== CHART GENERATION ====================
+
+def generate_pareto_charts(data: List[Dict[str, Any]]) -> Tuple[str, str]:
+    """
+    Generate Pareto Curve and ABC Pie Chart using Matplotlib.
+    Returns paths to saved image files.
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as mtick
+    except ImportError:
+        return ("", "")
+        
+    # Prepare Data
+    names = [d['client_name'] for d in data]
+    values = [d['ca'] for d in data]
+    cum_perc = [d['cumul_perc'] for d in data]
+    
+    # 1. Pareto Curve (Bar + Line)
+    # ----------------------------
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+    
+    # Bar Chart (Individual CA)
+    # Truncate names if too many or if too long
+    display_names = [n[:15] + '...' if len(n)>15 else n for n in names]
+    
+    # If too many clients, show top 20 only for clarity in chart?
+    # User said: "Visualisation chirurgicale", "Mettre en évidence le point de bascule 80%".
+    # If we have 1000 clients, chart is unreadable.
+    # Let's limit X axis to Top 30 for the curve, but calculation is global.
+    limit = 30
+    if len(names) > limit:
+        display_names = display_names[:limit]
+        values_chart = values[:limit]
+        cum_perc_chart = cum_perc[:limit]
+        title_suffix = f" (Top {limit})"
+    else:
+        values_chart = values
+        cum_perc_chart = cum_perc
+        title_suffix = ""
+
+    ax1.bar(display_names, values_chart, color='#1a237e', alpha=0.7, label='CA Client')
+    ax1.set_ylabel('Chiffre d\'Affaires (DA)')
+    ax1.set_xticklabels(display_names, rotation=45, ha='right', fontsize=8)
+    
+    # Line Chart (Cumulative %)
+    ax2 = ax1.twinx()
+    ax2.plot(display_names, cum_perc_chart, color='#c62828', marker='o', ms=4, lw=2, label='% Cumulé')
+    ax2.set_ylabel('Pourcentage Cumulé (%)')
+    ax2.set_ylim(0, 105)
+    ax2.yaxis.set_major_formatter(mtick.PercentFormatter())
+    
+    # 80% Threshold Line
+    ax2.axhline(y=80, color='green', linestyle='--', linewidth=1, label='Seuil 80%')
+    
+    plt.title(f"Graphique de Pareto (Loi 80/20){title_suffix}")
+    fig.legend(loc="upper right", bbox_to_anchor=(0.9, 0.85))
+    plt.tight_layout()
+    
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    curve_path = os.path.join(os.path.dirname(__file__), f"temp_pareto_curve_{timestamp}.png")
+    plt.savefig(curve_path, dpi=100)
+    plt.close()
+    
+    # 2. ABC Pie Chart
+    # ----------------
+    class_totals = {'A': 0, 'B': 0, 'C': 0}
+    for d in data:
+        if d['classe'] in class_totals:
+            class_totals[d['classe']] += d['ca']
+            
+    labels = []
+    sizes = []
+    colors_list = []
+    explode = []
+    
+    # A (Green), B (Blue), C (Grey)
+    mapping = {
+        'A': {'color': '#2e7d32', 'label': 'Classe A (80%)'}, 
+        'B': {'color': '#1565c0', 'label': 'Classe B (15%)'}, 
+        'C': {'color': '#757575', 'label': 'Classe C (5%)'}
+    }
+    
+    total_val = sum(class_totals.values())
+    
+    for cls in ['A', 'B', 'C']:
+        val = class_totals[cls]
+        if val > 0:
+            labels.append(f"{cls}\n({val/total_val*100:.1f}%)")
+            sizes.append(val)
+            colors_list.append(mapping[cls]['color'])
+            explode.append(0.1 if cls == 'A' else 0)
+            
+    fig2, ax = plt.subplots(figsize=(6, 6))
+    ax.pie(sizes, explode=explode, labels=labels, colors=colors_list, autopct='%1.1f%%',
+           shadow=True, startangle=90)
+    ax.axis('equal') 
+    plt.title("Répartition ABC du Chiffre d'Affaires")
+    
+    pie_path = os.path.join(os.path.dirname(__file__), f"temp_pareto_pie_{timestamp}.png")
+    plt.savefig(pie_path, dpi=100)
+    plt.close()
+    
+    return curve_path, pie_path
 
 def generate_ca_pdf(data: Dict[str, Any], filename: str):
     "Generate PDF for Etat du Chiffre d Affaires"
@@ -1705,3 +1824,100 @@ def preview_and_print_pdf(filename: str):
                 subprocess.call(["xdg-open", filename])
         except:
             pass
+
+def generate_cockpit_charts(data: Dict[str, Any]) -> Tuple[str, str, str]:
+    """
+    Generate charts for the Decision Cockpit.
+    Returns paths to (Thermometer, Top5, WeeklyEvolution).
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return ("", "", "")
+        
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    
+    # 1. Thermometer (Gauge) - Sales vs Target
+    # ----------------------------------------
+    # Simple Bar chart looking like a thermometer or bullet graph
+    current = data['charts']['sales_curr']
+    target = data['charts']['target_sales']
+    
+    # Increased size for better visibility
+    fig, ax = plt.subplots(figsize=(5, 8)) 
+    
+    # Background bar (Target)
+    ax.bar(['Objectif'], [target], color='#e0e0e0', width=0.6, label='Objectif (M-1)')
+    
+    # Foreground bar (Current)
+    # Color based on % of target
+    perc = (current / target * 100) if target > 0 else 0
+    color = '#4caf50' if perc >= 100 else '#ff9800' if perc >= 80 else '#f44336'
+    
+    ax.bar(['Objectif'], [current], color=color, width=0.4, label='Réalisé')
+    
+    # Target Line
+    ax.axhline(y=target, color='black', linestyle='--', linewidth=2)
+    
+    ax.set_ylabel("Chiffre d'Affaires (DA)")
+    ax.set_title(f"Objectif vs Réalisé\n({perc:.1f}%)")
+    plt.legend(loc='lower center')
+    
+    path_thermo = os.path.join(os.path.dirname(__file__), f"temp_cockpit_thermo_{timestamp}.png")
+    plt.tight_layout()
+    plt.savefig(path_thermo, dpi=100)
+    plt.close()
+    
+    # 2. Top 5 Clients (Horizontal Bar)
+    # ---------------------------------
+    top5 = data['charts']['top_5']
+    if top5:
+        names = [d['name'][:45] for d in top5] # Increased truncation limit to avoid collisions
+        values = [d['value'] for d in top5]
+        
+        # Reverse for horizontal bar (Top at top)
+        names.reverse()
+        values.reverse()
+        
+        # Increased size
+        fig, ax = plt.subplots(figsize=(8, 6))
+        bars = ax.barh(names, values, color='#1e88e5')
+        
+        ax.set_xlabel("CA (DA)")
+        ax.set_title("Top 5 Clients (Global)")
+        
+        # Add values on bars
+        for i, v in enumerate(values):
+            ax.text(v, i, f" {v:,.0f}", va='center', fontsize=9, fontweight='bold')
+            
+        path_bar = os.path.join(os.path.dirname(__file__), f"temp_cockpit_bar_{timestamp}.png")
+        plt.tight_layout()
+        plt.savefig(path_bar, dpi=100)
+        plt.close()
+    else:
+        path_bar = ""
+        
+    # 3. Weekly Evolution (Line Chart)
+    # --------------------------------
+    weekly = data['charts']['weekly_evolution'] # List of {date, value}
+    if weekly:
+        dates = [datetime.strptime(d['date'], "%Y-%m-%d").strftime("%d/%m") for d in weekly]
+        vals = [d['value'] for d in weekly]
+        
+        # Increased size
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(dates, vals, marker='o', linestyle='-', color='#673ab7', linewidth=2)
+        ax.fill_between(dates, vals, color='#673ab7', alpha=0.1)
+        
+        ax.set_ylabel("Ventes Quotidiennes")
+        ax.set_title("Évolution 7 Jours")
+        ax.grid(True, linestyle=':', alpha=0.6)
+        
+        path_line = os.path.join(os.path.dirname(__file__), f"temp_cockpit_line_{timestamp}.png")
+        plt.tight_layout()
+        plt.savefig(path_line, dpi=100)
+        plt.close()
+    else:
+        path_line = ""
+        
+    return path_thermo, path_bar, path_line

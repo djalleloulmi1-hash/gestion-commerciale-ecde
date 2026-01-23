@@ -730,7 +730,31 @@ def generate_stock_valuation_word(data):
                     run.font.color.rgb = RGBColor(0, 0, 255) # Blue
             except: pass
             
+            
             cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+    # TOTAL ROW
+    t_recept_qty = sum([d['reception_qty'] for d in data['data']])
+    t_recept_val = sum([d['reception_val'] for d in data['data']])
+    t_vente_qty = sum([d['vente_qty'] for d in data['data']])
+    t_vente_val = sum([d['vente_val'] for d in data['data']])
+    
+    tr_total = table.add_row()
+    tr_total.cells[0].text = "TOTAL"
+    tr_total.cells[0].paragraphs[0].runs[0].bold = True
+    
+    tr_total.cells[4].text = format_currency(t_recept_qty)
+    tr_total.cells[5].text = format_currency(t_recept_val)
+    tr_total.cells[6].text = format_currency(t_vente_qty)
+    tr_total.cells[7].text = format_currency(t_vente_val)
+    
+    for c in tr_total.cells:
+        set_cell_background(c, "E0E0E0")
+        if c.text.strip():
+             p = c.paragraphs[0]
+             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+             if not p.runs: p.add_run(c.text)
+             p.runs[0].bold = True
             
     directory = ensure_export_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1317,5 +1341,548 @@ def generate_grand_livre_word(data, period):
     directory = ensure_export_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(directory, f"Grand_Livre_{start_date}_{end_date}_{timestamp}.docx")
+    doc.save(filename)
+    return filename
+
+def generate_recovery_word(data, month, year):
+    """
+    Generate Word for Suivi Recouvrement Mensuel (M-1)
+    """
+    if not data or not data.get('data'):
+        return None
+        
+    doc = create_base_document(landscape=False)
+    
+    add_header(doc, f"ÉTAT DE COUVERTURE DES CRÉANCES", 
+               subtitle=f"(MOIS {month:02d}/{year})", 
+               date_str=f"Date: {datetime.now().strftime('%d/%m/%Y')}", landscape=False)
+               
+    doc.add_paragraph()
+    
+    # Global Stats
+    if data.get('totals'):
+        rate = data['totals'].get('rate', 0.0)
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run(f"Taux de Recouvrement Global : {rate:.2f}%")
+        run.bold = True
+        run.font.size = Pt(12)
+        run.font.name = 'Arial'
+        
+        # Color Logic
+        if rate >= 80:
+            run.font.color.rgb = RGBColor(0, 128, 0) # Green
+        elif rate > 50:
+            run.font.color.rgb = RGBColor(255, 152, 0) # Orange
+        else:
+            run.font.color.rgb = RGBColor(255, 0, 0) # Red
+            
+    doc.add_paragraph()
+    
+    # Table
+    headers = ["Client", "Dette M-1\n(Cible)", "Paiements M\n(Réalisé)", "Reste à Payer\n(Ecart)", "Statut"]
+    
+    table = doc.add_table(rows=1, cols=5)
+    style_table(table)
+    table.autofit = False
+    
+    # Header Row
+    row = table.rows[0]
+    set_repeat_table_header(row)
+    
+    col_widths = [Cm(6), Cm(3.25), Cm(3.25), Cm(3.25), Cm(3.25)] # Total ~19cm
+    
+    for i, text in enumerate(headers):
+        cell = row.cells[i]
+        cell.text = text
+        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cell.paragraphs[0].runs[0].bold = True
+        set_cell_background(cell, "D3D3D3")
+        table.columns[i].width = col_widths[i]
+        
+    # Data
+    for row_data in data['data']:
+        tr = table.add_row()
+        cells = tr.cells
+        
+        cells[0].text = row_data['raison_sociale']
+        cells[1].text = format_currency(row_data['dette_m_1'])
+        cells[2].text = format_currency(row_data['paiements_m'])
+        cells[3].text = format_currency(row_data['reste_a_payer'])
+        cells[4].text = row_data['statut']
+        
+        # Alignments
+        for i in range(1, 4):
+            cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        cells[4].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # Coloring Logic
+        statut = row_data['statut']
+        color = None
+        bold = False
+        
+        if statut == "RÉGLÉ":
+            color = RGBColor(0, 128, 0) # Green
+        elif statut == "ALERTE RECOUVREMENT":
+            color = RGBColor(255, 0, 0) # Red
+            bold = True
+        else:
+            color = RGBColor(255, 152, 0) # Orange
+            
+        if color:
+            # Apply to Client Name and Status
+            for idx in [0, 4]: 
+                p = cells[idx].paragraphs[0]
+                if not p.runs: p.add_run(cells[idx].text)
+                for r in p.runs:
+                    r.font.color.rgb = color
+                    if bold: r.bold = True
+                        
+    # Totals Row
+    if data.get('totals'):
+        t = data['totals']
+        tr = table.add_row()
+        cells = tr.cells
+        cells[0].text = "TOTAL"
+        cells[1].text = format_currency(t['target'])
+        cells[2].text = format_currency(t['realized'])
+        
+        for c in cells:
+            set_cell_background(c, "E0E0E0")
+            p = c.paragraphs[0]
+            if not p.runs: p.add_run(c.text)
+            p.runs[0].bold = True
+            
+        cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
+    doc.add_paragraph()
+    doc.add_paragraph()
+    
+    # Signatures
+    sig_table = doc.add_table(rows=1, cols=3)
+    sig_table.autofit = False
+    
+    # 6cm each
+    sig_table.columns[0].width = Cm(6)
+    sig_table.columns[1].width = Cm(7)
+    sig_table.columns[2].width = Cm(6)
+    
+    sig_table.cell(0, 0).text = "Service Recouvrement"
+    sig_table.cell(0, 2).text = "Direction Commerciale"
+    
+    for c in sig_table.rows[0].cells:
+        p = c.paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if not p.runs: p.add_run(c.text)
+        p.runs[0].bold = True
+        
+    directory = ensure_export_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = os.path.join(directory, f"Etat_Recouvrement_{month}-{year}_{timestamp}.docx")
+    
+
+    doc.save(filename)
+    return filename
+
+def generate_pareto_word(data: Dict[str, Any], start_date: str, end_date: str):
+    """
+    Generate Pareto Analysis Word Document.
+    """
+    from docx import Document
+    from docx.shared import Cm, Pt, RGBColor, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_ALIGN_VERTICAL
+    from utils import check_logo_exists, format_currency, generate_pareto_charts, ensure_export_dir
+    
+    doc = Document()
+    
+    # Header
+    HEADER_TEXT = "ANALYSE DE PERFORMANCE COMMERCIALE (PARETO)"
+    
+    section = doc.sections[0]
+    section.top_margin = Cm(1.5)
+    section.bottom_margin = Cm(1.5)
+    section.left_margin = Cm(1.5)
+    section.right_margin = Cm(1.5)
+    
+    header = section.header
+    header_table = header.add_table(rows=1, cols=3, width=Cm(18))
+    header_table.autofit = False
+    header_table.columns[0].width = Cm(4)
+    header_table.columns[1].width = Cm(10)
+    header_table.columns[2].width = Cm(4)
+    
+    # Logo
+    logo_path = check_logo_exists()
+    if logo_path:
+        cell_logo = header_table.cell(0, 0)
+        p = cell_logo.paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        run = p.add_run()
+        run.add_picture(logo_path, width=Cm(3.5))
+        
+    # Title
+    cell_title = header_table.cell(0, 1)
+    p_title = cell_title.paragraphs[0]
+    p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run_title = p_title.add_run(HEADER_TEXT)
+    run_title.bold = True
+    run_title.font.size = Pt(14)
+    run_title.font.name = 'Cambria'
+    run_title.font.color.rgb = RGBColor(0x1a, 0x23, 0x7e)
+    
+    # Date Range
+    p_sub = doc.add_paragraph()
+    p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run_sub = p_sub.add_run(f"Période du : {start_date} au {end_date}")
+    run_sub.font.size = Pt(11)
+    
+    doc.add_paragraph() # Spacer
+    
+    # Charts
+    curve_path, pie_path = generate_pareto_charts(data['data'])
+    
+    if curve_path and os.path.exists(curve_path):
+        p_img = doc.add_paragraph()
+        p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run_img = p_img.add_run()
+        run_img.add_picture(curve_path, width=Inches(6))
+        
+        # Pareto Legend
+        p_leg = doc.add_paragraph()
+        p_leg.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run_leg_title = p_leg.add_run("Interprétation du Diagramme :\n")
+        run_leg_title.bold = True
+        run_leg_title.font.size = Pt(9)
+        
+        run_leg_text = p_leg.add_run("Les barres classent vos clients par volume de chiffre d'affaires. La ligne rouge montre le cumul. La zone où la ligne coupe la barre des 80% identifie vos clients stratégiques (Classe A).")
+        run_leg_text.font.size = Pt(9)
+        
+    doc.add_paragraph()
+    
+    if pie_path and os.path.exists(pie_path):
+        p_img = doc.add_paragraph()
+        p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run_img = p_img.add_run()
+        run_img.add_picture(pie_path, width=Inches(4))
+        
+        # ABC Legend
+        p_abc = doc.add_paragraph()
+        p_abc.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # A
+        run_a_title = p_abc.add_run("Classe A (Vert) : ")
+        run_a_title.bold = True
+        run_a_title.font.size = Pt(9)
+        run_a_title.font.color.rgb = RGBColor(46, 125, 50)
+        
+        run_a_text = p_abc.add_run("Représente 80% de votre activité. Ce sont vos clients piliers. Toute baisse de leur part est un risque majeur pour l'unité.\n")
+        run_a_text.font.size = Pt(9)
+        
+        # B
+        run_b_title = p_abc.add_run("Classe B (Bleu) : ")
+        run_b_title.bold = True
+        run_b_title.font.size = Pt(9)
+        run_b_title.font.color.rgb = RGBColor(21, 101, 192)
+        
+        run_b_text = p_abc.add_run("Représente les 15% suivants. Ce sont vos clients en développement ou à fort potentiel.\n")
+        run_b_text.font.size = Pt(9)
+        
+        # C
+        run_c_title = p_abc.add_run("Classe C (Gris) : ")
+        run_c_title.bold = True
+        run_c_title.font.size = Pt(9)
+        run_c_title.font.color.rgb = RGBColor(117, 117, 117)
+        
+        run_c_text = p_abc.add_run("Représente les derniers 5%. Ce sont des clients occasionnels qui génèrent un grand volume administratif pour un faible revenu.")
+        run_c_text.font.size = Pt(9)
+        
+    doc.add_paragraph()
+    
+    # Dynamic Synthesis
+    clients_a = 0
+    total_clients = len(data['data'])
+    for row in data['data']:
+         if row['classe'] == 'A': clients_a += 1
+         
+    if total_clients > 0:
+        perc_clients_a = (clients_a / total_clients) * 100
+        
+        # Use a single-cell table for shading
+        synth_table = doc.add_table(rows=1, cols=1)
+        synth_table.autofit = False
+        synth_table.columns[0].width = Cm(17)
+        synth_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        
+        cell = synth_table.cell(0, 0)
+        set_cell_background(cell, "E8EAF6") # Light Indigo background
+        
+        p_synth = cell.paragraphs[0]
+        p_synth.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        run_synth_title = p_synth.add_run("Analyse de l'unité : ")
+        run_synth_title.bold = True
+        run_synth_title.font.color.rgb = RGBColor(0x1a, 0x23, 0x7e)
+        
+        run_synth_text = p_synth.add_run(f"Votre activité est concentrée sur {clients_a} clients qui réalisent à eux seuls 80% du chiffre d'affaires.")
+        run_synth_text.font.color.rgb = RGBColor(0x1a, 0x23, 0x7e)
+        
+        if clients_a < 5 or perc_clients_a < 10:
+             run_warn = p_synth.add_run(" Attention à la forte dépendance envers ce petit groupe.")
+             run_warn.bold = True
+             run_warn.font.color.rgb = RGBColor(0x1a, 0x23, 0x7e)
+             
+        doc.add_paragraph() # Spacer
+
+    # Table
+    table = doc.add_table(rows=1, cols=5)
+    table.style = 'Table Grid'
+    table.autofit = False
+    
+    # Column widths
+    widths = [Cm(1.5), Cm(8), Cm(4), Cm(2.5), Cm(2)]
+    headers = ['Rang', 'Client', 'Chiffre d\'Affaires', '% Cumulé', 'Classe']
+    
+    hdr_cells = table.rows[0].cells
+    for i, (text, width) in enumerate(zip(headers, widths)):
+        hdr_cells[i].text = text
+        hdr_cells[i].width = width
+        p = hdr_cells[i].paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.runs[0]
+        run.bold = True
+        run.font.color.rgb = RGBColor(255, 255, 255)
+        set_cell_background(hdr_cells[i], "1A237E") # Dark Blue
+        
+    # Data
+    for row in data['data']:
+        
+        cells = table.add_row().cells
+        cells[0].text = str(row['rank'])
+        cells[1].text = row['client_name']
+        cells[2].text = format_currency(row['ca'])
+        cells[3].text = f"{row['cumul_perc']:.2f}%"
+        cells[4].text = row['classe']
+        
+        # Alignments
+        cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        cells[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cells[4].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # Colors
+        bg_color = "FFFFFF"
+        text_color_rgb = RGBColor(0, 0, 0)
+        
+        if row['classe'] == 'A':
+            bg_color = "E8F5E9" # Light Green
+            text_color_rgb = RGBColor(46, 125, 50) # Dark Green
+        elif row['classe'] == 'B':
+            bg_color = "E3F2FD" # Light Blue
+            text_color_rgb = RGBColor(21, 101, 192) # Dark Blue
+            
+        for i in range(5):
+            set_cell_background(cells[i], bg_color)
+            
+        # Set Class Text Color
+        if row['classe'] in ['A', 'B']:
+            if len(cells[4].paragraphs[0].runs) > 0:
+                run = cells[4].paragraphs[0].runs[0]
+            else:
+                run = cells[4].paragraphs[0].add_run(row['classe'])
+            run.font.bold = True
+            run.font.color.rgb = text_color_rgb
+
+    # Table is enough for summary logic, no need for footer summary text anymore since we have the detailed synthesis above.
+    
+    directory = ensure_export_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = os.path.join(directory, f"Pareto_Word_{start_date}_{end_date}_{timestamp}.docx")
+    doc.save(filename)
+    
+    return filename
+
+def generate_cockpit_word(data: Dict[str, Any]):
+    """
+    Generate Master Dashboard (Cockpit) Word Document.
+    """
+    from docx import Document
+    from docx.shared import Cm, Pt, RGBColor, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
+    from utils import check_logo_exists, format_currency, generate_cockpit_charts, ensure_export_dir
+    
+    doc = Document()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Setup Page margins for Landscape-ish feel (though easier to keep Portrait for max compatibility, 
+    # user asked for "Réplique fidèle", usually A4 Landscape is better for Dashboards)
+    section = doc.sections[0]
+    section.orientation = 1 # Landscape
+    # Accessing underlying XML to truly force Landscape if needed, but python-docx SECTION orientation is simpler
+    new_width, new_height = section.page_height, section.page_width
+    section.page_width = new_width
+    section.page_height = new_height
+    section.left_margin = Cm(1.27)
+    section.right_margin = Cm(1.27)
+    section.top_margin = Cm(1.27)
+    section.bottom_margin = Cm(1.27)
+    
+    # Header
+    # ------
+    header_table = doc.add_table(rows=1, cols=2)
+    header_table.autofit = False
+    header_table.columns[0].width = Cm(4)
+    header_table.columns[1].width = Cm(20)
+    
+    logo_path = check_logo_exists()
+    if logo_path:
+        cell_logo = header_table.cell(0, 0)
+        p = cell_logo.paragraphs[0]
+        run = p.add_run()
+        run.add_picture(logo_path, width=Cm(3.5))
+        
+    cell_title = header_table.cell(0, 1)
+    p_title = cell_title.paragraphs[0]
+    p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run_title = p_title.add_run("TABLEAU DE BORD MAÎTRE (COCKPIT)")
+    run_title.bold = True
+    run_title.font.size = Pt(20)
+    run_title.font.color.rgb = RGBColor(0x1a, 0x23, 0x7e)
+    
+    p_sub = cell_title.add_paragraph(f"Période: {data.get('period', '--')}")
+    p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    doc.add_paragraph() # Spacer
+    
+    # 1. Tiles (Table with Backgrounds)
+    # ---------------------------------
+    # 1 Row, 4 Cols
+    t_tiles = doc.add_table(rows=1, cols=4)
+    t_tiles.autofit = False
+    col_width = Cm(6.5)
+    
+    kpis = data['kpis']
+    evo = kpis['evolution']
+    arrow = "▲" if evo >= 0 else "▼"
+    
+    tiles_info = [
+        ("PERFORMANCE VENTES", format_currency(kpis['ca_curr']), f"{arrow} {abs(evo):.1f}% vs M-1", "1E88E5"),
+        ("SANTÉ FINANCIÈRE", f"{kpis['recovery_rate']:.1f}%", "Recouvrement", "43A047"),
+        ("RISQUE CRÉANCE (+30J)", format_currency(kpis['debt_30_days']), "Montant à Risque", "FB8C00"),
+        ("ALERTE OPÉRATIONNELLE", f"{kpis['cancel_rate']:.1f}%", "Taux Annulation", "E53935")
+    ]
+    
+    row_cells = t_tiles.rows[0].cells
+    for i, (title, val, sub, color) in enumerate(tiles_info):
+        cell = row_cells[i]
+        cell.width = col_width
+        set_cell_background(cell, color)
+        
+        # Title
+        p1 = cell.paragraphs[0]
+        p1.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        r1 = p1.add_run(title)
+        r1.font.color.rgb = RGBColor(255, 255, 255)
+        r1.font.bold = True
+        r1.font.size = Pt(9)
+        
+        # Value
+        p2 = cell.add_paragraph()
+        p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r2 = p2.add_run(val)
+        r2.font.color.rgb = RGBColor(255, 255, 255)
+        r2.font.bold = True
+        r2.font.size = Pt(18)
+        
+        # Sub
+        p3 = cell.add_paragraph()
+        p3.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        r3 = p3.add_run(sub)
+        r3.font.color.rgb = RGBColor(255, 255, 255)
+        r3.font.size = Pt(9)
+        
+    doc.add_paragraph()
+    
+    # 2. Charts
+    # ---------
+    from utils import generate_cockpit_charts
+    p_a, p_b, p_c = generate_cockpit_charts(data)
+    
+    t_charts = doc.add_table(rows=1, cols=3)
+    t_charts.autofit = False
+    
+    if p_a and os.path.exists(p_a):
+        c = t_charts.cell(0, 0)
+        p = c.paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run()
+        run.add_picture(p_a, width=Cm(5))
+        
+    if p_b and os.path.exists(p_b):
+        c = t_charts.cell(0, 1)
+        p = c.paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run()
+        run.add_picture(p_b, width=Cm(8))
+        
+    if p_c and os.path.exists(p_c):
+        c = t_charts.cell(0, 2)
+        p = c.paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run()
+        run.add_picture(p_c, width=Cm(11))
+        
+    doc.add_paragraph()
+    
+    # 3. Alerts
+    # ---------
+    p_alert = doc.add_paragraph()
+    run_alert = p_alert.add_run("ALERTES DE SÉCURITÉ (Code Rouge)")
+    run_alert.bold = True
+    run_alert.font.color.rgb = RGBColor(255, 0, 0)
+    run_alert.font.size = Pt(12)
+    
+    if data['alerts']:
+        t_alerts = doc.add_table(rows=1, cols=3)
+        t_alerts.style = 'Table Grid'
+        t_alerts.autofit = False
+        t_alerts.columns[0].width = Cm(12)
+        t_alerts.columns[1].width = Cm(6)
+        t_alerts.columns[2].width = Cm(8)
+        
+        hdrs = t_alerts.rows[0].cells
+        hdrs[0].text = "Client"
+        hdrs[1].text = "Montant à Risque"
+        hdrs[2].text = "Motif"
+        
+        for h in hdrs:
+            set_cell_background(h, "FFEBEE")
+            p = h.paragraphs[0]
+            for r in p.runs:
+                r.font.bold = True
+                r.font.color.rgb = RGBColor(255, 0, 0)
+                
+        for alert in data['alerts']:
+            row = t_alerts.add_row().cells
+            row[0].text = alert['name']
+            row[1].text = format_currency(alert['amount'])
+            row[2].text = alert['reason']
+            
+            # Style rows
+            for cell in row:
+                set_cell_background(cell, "FFEBEE") # Red background for all alert rows
+                p = cell.paragraphs[0]
+                if len(p.runs) > 0:
+                    p.runs[0].font.color.rgb = RGBColor(0, 0, 0) # Black text
+                else:
+                    # Accessing underlying run creation if strict needed
+                    pass
+    else:
+        doc.add_paragraph("Aucune alerte critique détectée.")
+        
+    directory = ensure_export_dir()
+    filename = os.path.join(directory, f"Cockpit_Word_{timestamp}.docx")
     doc.save(filename)
     return filename

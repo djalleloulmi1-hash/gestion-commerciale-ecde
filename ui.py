@@ -240,6 +240,7 @@ class MainApplication:
         
         # Sidebar buttons
         buttons = [
+            ("Tableau de Bord Maître", self.show_master_dashboard),
             ("Tableau de Bord", self.show_dashboard),
             ("Clients", self.show_clients),
             ("Produits", self.show_products),
@@ -294,19 +295,18 @@ class MainApplication:
         self.content_frame = tk.Frame(main_container, bg=BG_COLOR)
         self.content_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
         
-        # Show dashboard by default
-        self.show_dashboard()
+        if self.user.get('role') == 'admin':
+            self.show_master_dashboard()
+        else:
+            self.show_dashboard()
 
     def _load_header_logo(self):
         """Load and resize logo for header tiling"""
         self.header_logo = None
         self.tk_header_logo = None
         
-        logo_path = "logo_gica.png"
-        if not os.path.exists(logo_path):
-             logo_path = "logo_entete.png" if os.path.exists("logo_entete.png") else "logo.png"
-             
-        if os.path.exists(logo_path):
+        logo_path = check_logo_exists()
+        if logo_path:
             try:
                 img = Image.open(logo_path)
                 # Resize proportionally to fit height
@@ -317,6 +317,14 @@ class MainApplication:
                 self.tk_header_logo = ImageTk.PhotoImage(img)
             except Exception as e:
                 print(f"Error loading logo: {e}")
+
+    def show_master_dashboard(self):
+        """Show new Master Dashboard (Cockpit)"""
+        self.show_frame(MasterDashboardFrame)
+
+    def show_dashboard(self):
+        """Show default Dashboard"""
+        self.show_frame(DashboardFrame)
 
     def _on_header_resize(self, event):
         """Redraw header on resize"""
@@ -355,42 +363,46 @@ class MainApplication:
 
 
     
-    def switch_frame(self, new_frame_class, **kwargs):
+    def show_frame(self, frame_class, **kwargs):
         """Switch to a new frame"""
         if self.current_frame:
             self.current_frame.destroy()
-        self.current_frame = new_frame_class(self.content_frame, self, **kwargs)
-        self.current_frame.pack(fill=tk.BOTH, expand=True)
-    
-    def show_dashboard(self):
-        self.switch_frame(DashboardFrame)
+            
+        try:
+            self.current_frame = frame_class(self.content_frame, self, **kwargs)
+            self.current_frame.pack(fill=tk.BOTH, expand=True)
+        except Exception as e:
+            messagebox.showerror("Erreur UI", f"Impossible d'afficher l'écran : {e}")
+            traceback.print_exc()
+
+    # show_dashboard is defined above, so skipping duplicate
     
     def show_clients(self):
-        self.switch_frame(ClientsFrame)
+        self.show_frame(ClientsFrame)
     
     def show_products(self):
-        self.switch_frame(ProductsFrame)
+        self.show_frame(ProductsFrame)
     
     def show_receptions(self):
-        self.switch_frame(ReceptionsFrame)
+        self.show_frame(ReceptionsFrame)
     
     def show_invoices(self):
-        self.switch_frame(InvoicesFrame)
+        self.show_frame(InvoicesFrame)
     
     def show_payments(self):
-        self.switch_frame(PaymentsFrame)
+        self.show_frame(PaymentsFrame)
     
     def show_situation(self):
-        self.switch_frame(SituationFrame)
+        self.show_frame(SituationFrame)
     
     def show_stock(self):
-        self.switch_frame(StockFrame)
+        self.show_frame(StockFrame)
     
     def show_users(self):
-        self.switch_frame(UsersFrame)
+        self.show_frame(UsersFrame)
     
     def show_prices(self):
-        self.switch_frame(PricesFrame)
+        self.show_frame(PricesFrame)
     
     def show_closure(self):
         # Check permissions
@@ -1374,7 +1386,7 @@ class InvoicesFrame(ttk.Frame):
         vsb = ttk.Scrollbar(table_frame, orient="vertical")
         hsb = ttk.Scrollbar(table_frame, orient="horizontal")
         
-        columns = ("Numéro", "Type", "Réf. Liée", "Date", "Client", "Montant HT", "TVA", "Montant TTC", "Etat Paiement")
+        columns = ("Numéro", "Type", "Réf. Liée", "Date", "Client", "Montant HT", "TVA", "Montant TTC", "Cond. Vente")
         self.tree = ttk.Treeview(
             table_frame, 
             columns=columns, 
@@ -1398,7 +1410,7 @@ class InvoicesFrame(ttk.Frame):
             "Montant HT": 100,
             "TVA": 100,
             "Montant TTC": 100,
-            "Etat Paiement": 100
+            "Cond. Vente": 120
         }
         
         for col in columns:
@@ -1444,7 +1456,7 @@ class InvoicesFrame(ttk.Frame):
         add_filter(filter_frame, "Type", "type", is_combo=True, values=["", "Facture", "Avoir"], width=10)
         add_filter(filter_frame, "Date (AAAA-MM-JJ)", "date", width=12)
         add_filter(filter_frame, "Client", "client", width=20)
-        add_filter(filter_frame, "Etat Paiement", "etat", is_combo=True, values=["", "Comptant", "À Terme", "Non soldée", "Payée"], width=12)
+        add_filter(filter_frame, "Conditions de Vente", "condition", is_combo=True, values=["", "Au Comptant", "À Terme", "Sur Avances"], width=15)
         
         # Clear button
         tk.Button(filter_frame, text="Effacer", command=self.clear_filters, bg="#757575", fg="white", font=("Arial", 8)).pack(side=tk.LEFT, padx=15, pady=5)
@@ -1468,7 +1480,7 @@ class InvoicesFrame(ttk.Frame):
         f_type = self.filters['type'].get()
         f_date = self.filters['date'].get()
         f_client = self.filters['client'].get().lower()
-        f_etat = self.filters['etat'].get()
+        f_condition = self.filters['condition'].get()
 
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -1484,10 +1496,13 @@ class InvoicesFrame(ttk.Frame):
             
             # Logic for payment status if needed (some fields might be calculated or string)
             # In DB it is 'etat_paiement' usually
-            current_etat = f.get('etat_paiement', 'N/A')
-            if f_etat:
-                 # Fuzzy match or exact? Let's do partial for flexibility
-                 if f_etat.lower() not in str(current_etat).lower(): continue
+            # Sales Condition Filter
+            current_condition = f.get('type_vente', '')
+            if f_condition:
+                 # Normalize for comparison (handle À vs A)
+                 f_cond_norm = f_condition.lower().replace('à', 'a')
+                 curr_cond_norm = str(current_condition).lower().replace('à', 'a')
+                 if f_cond_norm not in curr_cond_norm: continue
 
             # Determine linked reference(s)
             linked_ref = ""
@@ -1531,9 +1546,10 @@ class InvoicesFrame(ttk.Frame):
                 display_tags.append('avoir_row')
 
             # Determine status text
-            status_text = f.get('etat_paiement', 'N/A')
+            # Determine condition text
+            cond_text = f.get('type_vente', '')
             if f.get('statut') == 'ANNULEE' or f.get('statut_facture') == 'Annulée':
-                status_text = "(ANNULEE)"
+                cond_text += " (ANNULEE)"
 
             self.tree.insert("", tk.END, iid=f['id'], values=(
                 f['numero'],
@@ -1544,7 +1560,7 @@ class InvoicesFrame(ttk.Frame):
                 format_currency(f['montant_ht']),
                 format_currency(f['montant_tva']),
                 format_currency(f['montant_ttc']),
-                status_text
+                cond_text
             ), tags=tuple(display_tags))
     
     def add_invoice(self, type_doc):
@@ -1946,6 +1962,16 @@ class SituationFrame(ttk.Frame):
         tk.Radiobutton(mode_frame_2, text="Grand-Livre Détaillé", variable=self.mode, 
                       value="grand_livre", command=self.update_ui, bg=BG_COLOR, fg=TEXT_COLOR, selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
         
+        # Third Row of Modes (New Requests)
+        mode_frame_3 = tk.Frame(self, bg=BG_COLOR)
+        mode_frame_3.pack(fill=tk.X, padx=40, pady=5)
+
+        tk.Radiobutton(mode_frame_3, text="Suivi Recouvrement (M-1)", variable=self.mode, 
+                      value="recovery_followup", command=self.update_ui, bg="red", fg="white", selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
+
+        tk.Radiobutton(mode_frame_3, text="Pareto 80/20 (Analyse ABC)", variable=self.mode, 
+                      value="pareto", command=self.update_ui, bg="purple", fg="white", selectcolor=SIDEBAR_COLOR).pack(side=tk.LEFT, padx=10)
+        
         # Controls Frame (Dynamic)
         self.controls_frame = tk.Frame(self, bg=BG_COLOR)
         self.controls_frame.pack(fill=tk.X, padx=40, pady=10)
@@ -1969,7 +1995,7 @@ class SituationFrame(ttk.Frame):
             
             clients = self.app.db.get_all_clients()
             self.client_var = tk.StringVar()
-            self.client_combo = ttk.Combobox(self.controls_frame, textvariable=self.client_var, width=40)
+            self.client_combo = ttk.Combobox(self.controls_frame, textvariable=self.client_var, width=60)
             self.client_combo['values'] = [f"{c['id']} - {c['raison_sociale']}" for c in clients]
             self.client_combo.pack(side=tk.LEFT, padx=5)
             self.client_combo.bind("<<ComboboxSelected>>", self.load_situation)
@@ -2007,7 +2033,7 @@ class SituationFrame(ttk.Frame):
         elif mode == "grand_livre":
             tk.Label(self.controls_frame, text="Client (Optionnel):", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
             self.client_gl_var = tk.StringVar()
-            self.client_gl_combo = ttk.Combobox(self.controls_frame, textvariable=self.client_gl_var, width=25)
+            self.client_gl_combo = ttk.Combobox(self.controls_frame, textvariable=self.client_gl_var, width=60)
             
             # Fetch clients for combo
             clients = self.app.db.get_all_clients(active_only=True)
@@ -2045,6 +2071,27 @@ class SituationFrame(ttk.Frame):
             if hasattr(self, 'info_text'):
                 self.info_text.delete(1.0, tk.END)
                 self.info_text.insert(tk.END, "Sélectionnez une période pour générer le Grand-Livre Détaillé.\nCe rapport affiche l'ensemble des opérations (Factures, Paiements) par client avec solde progressif.")
+
+                self.info_text.insert(tk.END, "Sélectionnez une période pour générer le Grand-Livre Détaillé.\nCe rapport affiche l'ensemble des opérations (Factures, Paiements) par client avec solde progressif.")
+
+        elif mode == "recovery_followup":
+            # Month Selection
+            tk.Label(self.controls_frame, text="Mois:", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            self.month_var = tk.StringVar(value=str(datetime.now().month))
+            month_combo = ttk.Combobox(self.controls_frame, textvariable=self.month_var, values=[str(i) for i in range(1, 13)], width=5)
+            month_combo.pack(side=tk.LEFT, padx=5)
+            
+            tk.Label(self.controls_frame, text="Année:", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            self.year_var = tk.StringVar(value=str(datetime.now().year))
+            year_combo = ttk.Combobox(self.controls_frame, textvariable=self.year_var, values=[str(i) for i in range(2020, 2031)], width=6)
+            year_combo.pack(side=tk.LEFT, padx=5)
+            
+            tk.Button(self.controls_frame, text="Ouvrir Rapport", bg=ACCENT_COLOR, fg="white", 
+                     command=self.open_recovery_dialog).pack(side=tk.LEFT, padx=20)
+            
+            if hasattr(self, 'info_text'):
+                self.info_text.delete(1.0, tk.END)
+                self.info_text.insert(tk.END, "Analyse du Recouvrement Mensuel (M-1).\nObjectif : Vérifier que les clients ayant une dette le mois précédent l'ont payée ce mois-ci.\n\nCalcul :\n- Cible : Solde Fin M-1 (Dette)\n- Réalisé : Paiements reçus en M\n- Écart : Cible - Réalisé")
 
         elif mode == "global_consumption":
             tk.Label(self.controls_frame, text="Arrêté au :", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
@@ -2094,7 +2141,7 @@ class SituationFrame(ttk.Frame):
             tk.Label(self.controls_frame, text="Produit:", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
             products = self.app.db.get_all_products()
             self.product_var = tk.StringVar()
-            self.product_combo = ttk.Combobox(self.controls_frame, textvariable=self.product_var, width=30)
+            self.product_combo = ttk.Combobox(self.controls_frame, textvariable=self.product_var, width=60)
             self.product_combo['values'] = [f"{p['id']} - {p['nom']}" for p in products]
             self.product_combo.pack(side=tk.LEFT, padx=5)
 
@@ -2195,6 +2242,27 @@ class SituationFrame(ttk.Frame):
             
             tk.Button(self.controls_frame, text="Exporter Word", bg="#2b5797", fg="white", 
                       command=self.export_word).pack(side=tk.LEFT, padx=5)
+
+        elif mode == "pareto":
+            tk.Label(self.controls_frame, text="Du:", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            self.start_date_entry = tk.Entry(self.controls_frame, width=12, bg="#455a64", fg="white", insertbackground="white")
+            self.start_date_entry.insert(0, datetime.now().strftime("%Y-%m-01"))
+            self.start_date_entry.pack(side=tk.LEFT, padx=5)
+            
+            tk.Label(self.controls_frame, text="Au:", bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=5)
+            self.end_date_entry = tk.Entry(self.controls_frame, width=12, bg="#455a64", fg="white", insertbackground="white")
+            self.end_date_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
+            self.end_date_entry.pack(side=tk.LEFT, padx=5)
+            
+            tk.Button(self.controls_frame, text="Générer PDF", bg=ACCENT_COLOR, fg="white", 
+                     command=self.export_pdf).pack(side=tk.RIGHT, padx=5)
+            
+            tk.Button(self.controls_frame, text="Vers Word", bg="#2b5797", fg="white", 
+                      command=self.export_word).pack(side=tk.RIGHT, padx=5)
+            
+            if hasattr(self, 'info_text'):
+                self.info_text.delete(1.0, tk.END)
+                self.info_text.insert(tk.END, "Analyse ANALYTIQUE PARETO (80/20).\n\nVisualisation Graphique :\n- Courbe de Pareto (Identification des 20% de clients réalisant 80% du CA)\n- Répartition ABC (Camembert)\n\nCode Couleur :\n- Classe A (80%) : Vert\n- Classe B (15%) : Bleu\n- Classe C (5%) : Gris")
 
     def load_situation(self, event=None):
         mode = self.mode.get()
@@ -2470,6 +2538,27 @@ class SituationFrame(ttk.Frame):
              else:
                  return
 
+        elif mode == "pareto":
+             from reports import generate_pareto_pdf
+             start = self.start_date_entry.get()
+             end = self.end_date_entry.get()
+             
+             try:
+                 data = self.app.logic.get_clients_pareto_data(start, end)
+                 if not data or not data.get('data'):
+                      messagebox.showinfo("Info", "Aucune donnée trouvée.")
+                      return
+                      
+                 pdf_dir = ensure_pdf_export_dir()
+                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                 filename = os.path.join(pdf_dir, f"Pareto_Analysis_{start}_{end}_{timestamp}.pdf")
+                 
+                 generate_pareto_pdf(data, start, end, filename)
+                 preview_and_print_pdf(filename)
+             except Exception as e:
+                 messagebox.showerror("Erreur", f"Erreur PDF: {e}")
+                 print(f"ERROR: {e}")
+
     def generate_stock_val_excel(self):
         self._generate_stock_report("excel")
 
@@ -2630,8 +2719,25 @@ class SituationFrame(ttk.Frame):
 
                      data = self.app.logic.get_grand_livre_data(start, end, client_id=client_id)
                      filename = word_exports.generate_grand_livre_word(data, {'start': start, 'end': end})
+                     filename = word_exports.generate_grand_livre_word(data, {'start': start, 'end': end})
+                     
+            elif mode == "recovery_followup":
+                 month = int(self.month_var.get())
+                 year = int(self.year_var.get())
+                 data = self.app.logic.get_monthly_recovery_data(month, year)
+                 filename = word_exports.generate_recovery_word(data, month, year)
+
+            elif mode == "pareto":
+                 start = self.start_date_entry.get()
+                 end = self.end_date_entry.get()
+                 data = self.app.logic.get_clients_pareto_data(start, end)
+                 if data and data.get('data'):
+                     filename = word_exports.generate_pareto_word(data, start, end)
                  else:
-                     return
+                     messagebox.showinfo("Info", "Pas de données")
+            
+            else:
+                 return
 
             if filename:
                  messagebox.showinfo("Succès", f"Export Word effectué :\n{os.path.basename(filename)}")
@@ -2642,6 +2748,17 @@ class SituationFrame(ttk.Frame):
             import traceback
             traceback.print_exc()
             messagebox.showerror("Erreur", f"Erreur lors de l'export Word:\n{str(e)}")
+
+    def open_recovery_dialog(self):
+        try:
+            month = int(self.month_var.get())
+            year = int(self.year_var.get())
+            data = self.app.logic.get_monthly_recovery_data(month, year)
+            RecoveryFollowUpDialog(self.winfo_toplevel(), data, month, year)
+        except ValueError:
+            messagebox.showerror("Erreur", "Format de date invalide")
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Une erreur est survenue : {e}")
 
 
 # ==================== STOCK FRAME ====================
@@ -4096,7 +4213,7 @@ class InvoiceDialog:
         tk.Label(top_frame, text="Client*").pack(side=tk.LEFT, padx=5)
         clients = self.app.db.get_all_clients()
         self.client_var = tk.StringVar()
-        self.client_combo = ttk.Combobox(top_frame, textvariable=self.client_var, width=40)
+        self.client_combo = ttk.Combobox(top_frame, textvariable=self.client_var, width=70)
         self.client_combo['values'] = [f"{c['id']} - {c['raison_sociale']}" for c in clients]
         if self.readonly:
             self.client_combo.config(state="disabled")
@@ -4108,7 +4225,7 @@ class InvoiceDialog:
         tk.Label(top_frame, text="Contrat / Convention").pack(side=tk.LEFT, padx=(20, 5))
         self.contract_var = tk.StringVar()
         state_contract = "disabled" if self.readonly else "normal"
-        self.contract_combo = ttk.Combobox(top_frame, textvariable=self.contract_var, width=30, state=state_contract)
+        self.contract_combo = ttk.Combobox(top_frame, textvariable=self.contract_var, width=50, state=state_contract)
         self.contract_combo.pack(side=tk.LEFT, padx=5)
         self.contract_combo.pack(side=tk.LEFT, padx=5)
         self.contracts_map = {}
@@ -4206,7 +4323,7 @@ class InvoiceDialog:
         
         tk.Label(transport_frame, text="Chauffeur:").pack(side=tk.LEFT, padx=5)
         self.chauffeur_var = tk.StringVar()
-        self.chauffeur_entry = ttk.Combobox(transport_frame, textvariable=self.chauffeur_var, width=20)
+        self.chauffeur_entry = ttk.Combobox(transport_frame, textvariable=self.chauffeur_var, width=40)
         if not self.readonly:
              try:
                  uniques = self.app.db.get_unique_chauffeurs()
@@ -4230,7 +4347,7 @@ class InvoiceDialog:
 
         tk.Label(transport_frame, text="Transporteur:").pack(side=tk.LEFT, padx=5)
         self.transporteur_var = tk.StringVar()
-        self.transporteur_combo = ttk.Combobox(transport_frame, textvariable=self.transporteur_var, width=20)
+        self.transporteur_combo = ttk.Combobox(transport_frame, textvariable=self.transporteur_var, width=40)
         if not self.readonly:
              try:
                  # Populate from Logic/DB
@@ -4263,7 +4380,7 @@ class InvoiceDialog:
             tk.Label(self.pay_frame, text="Mode:").pack(side=tk.LEFT)
             self.mode_var = tk.StringVar(value="Espèces")
             modes = ["Espèces", "Chèque", "Virement", "Versement"]
-            self.mode_combo = ttk.Combobox(self.pay_frame, textvariable=self.mode_var, values=modes, width=10, state="readonly")
+            self.mode_combo = ttk.Combobox(self.pay_frame, textvariable=self.mode_var, values=modes, width=20, state="readonly")
             self.mode_combo.pack(side=tk.LEFT, padx=5)
             
             tk.Label(self.pay_frame, text="Réf:").pack(side=tk.LEFT, padx=5)
@@ -4273,7 +4390,7 @@ class InvoiceDialog:
             tk.Label(self.pay_frame, text="Banque:").pack(side=tk.LEFT, padx=5)
             self.banque_var = tk.StringVar()
             banques = ["BNA", "BEA", "CPA", "BADR", "BDL", "Al Baraka", "AGB", "Natixis", "Société Générale"]
-            self.banque_combo = ttk.Combobox(self.pay_frame, textvariable=self.banque_var, values=banques, width=15)
+            self.banque_combo = ttk.Combobox(self.pay_frame, textvariable=self.banque_var, values=banques, width=30)
             self.banque_combo.pack(side=tk.LEFT, padx=5)
             
             # Init State
@@ -4287,7 +4404,7 @@ class InvoiceDialog:
             # Product Code
             tk.Label(entry_frame, text="Produit").grid(row=0, column=0, padx=5)
             self.prod_code_var = tk.StringVar()
-            self.prod_combo = ttk.Combobox(entry_frame, textvariable=self.prod_code_var, width=30)
+            self.prod_combo = ttk.Combobox(entry_frame, textvariable=self.prod_code_var, width=60)
             
             # Load products with more robust keys
             self.products = self.app.db.get_all_products()
@@ -5391,7 +5508,7 @@ class LigneDialog:
     def _build(self):
         tk.Label(self.dialog, text="Produit").pack(pady=5)
         self.product_var = tk.StringVar()
-        self.product_combo = ttk.Combobox(self.dialog, textvariable=self.product_var, width=40)
+        self.product_combo = ttk.Combobox(self.dialog, textvariable=self.product_var, width=60)
         # Map values
         self.products_map = {}
         for p in self.products:
@@ -5462,7 +5579,7 @@ class PaymentDialog:
         tk.Label(self.dialog, text="Client*").pack(pady=5)
         clients = self.app.db.get_all_clients()
         self.client_var = tk.StringVar()
-        self.client_combo = ttk.Combobox(self.dialog, textvariable=self.client_var, width=40)
+        self.client_combo = ttk.Combobox(self.dialog, textvariable=self.client_var, width=70)
         self.client_combo['values'] = [f"{c['id']} - {c['raison_sociale']}" for c in clients]
         self.client_combo['values'] = [f"{c['id']} - {c['raison_sociale']}" for c in clients]
         self.client_combo.pack(pady=5)
@@ -5479,7 +5596,7 @@ class PaymentDialog:
         
         tk.Label(self.dialog, text="Mode de Paiement*").pack(pady=5)
         self.mode_var = tk.StringVar(value="Espèces")
-        ttk.Combobox(self.dialog, textvariable=self.mode_var, values=["Espèces", "Chèque", "Virement", "Versement"]).pack(pady=5)
+        ttk.Combobox(self.dialog, textvariable=self.mode_var, values=["Espèces", "Chèque", "Virement", "Versement"], width=20).pack(pady=5)
         
         tk.Label(self.dialog, text="Référence").pack(pady=5)
         self.reference = tk.Entry(self.dialog, bg="#455a64", fg="white", insertbackground="white")
@@ -5488,8 +5605,19 @@ class PaymentDialog:
         tk.Label(self.dialog, text="Banque").pack(pady=5)
         self.banque_var = tk.StringVar()
         BANKS = ["BNA", "BEA", "CPA", "BADR", "BDL", "CNEP", "Société Générale", "Natixis", "AGB", "Trust Bank", "Al Salam", "Housing Bank", "ABC", "BNP Paribas"]
-        self.banque = ttk.Combobox(self.dialog, textvariable=self.banque_var, values=BANKS)
+        self.banque = ttk.Combobox(self.dialog, textvariable=self.banque_var, values=BANKS, width=30)
         self.banque.pack(pady=5)
+        
+        # [NEW] Date Paiement
+        tk.Label(self.dialog, text="Date de Paiement").pack(pady=5)
+        if DateEntry:
+            self.date_paiement = DateEntry(self.dialog, width=20, background=PRIMARY_COLOR, foreground='white',
+                                    headersbackground=PRIMARY_COLOR, headersforeground='white',
+                                    borderwidth=2, date_pattern='dd/mm/yyyy')
+        else:
+            self.date_paiement = tk.Entry(self.dialog, width=20, bg="#455a64", fg="white", insertbackground="white")
+            self.date_paiement.insert(0, datetime.now().strftime("%d/%m/%Y"))
+        self.date_paiement.pack(pady=5)
         
         # New Contract Fields
         tk.Label(self.dialog, text="N° Contrat / Convention").pack(pady=5)
@@ -5536,6 +5664,16 @@ class PaymentDialog:
         self.mode_var.set(p['mode_paiement'])
         if p.get('reference'): self.reference.insert(0, p['reference'])
         if p.get('banque'): self.banque.set(p['banque'])
+        
+        # Load Date Paiement
+        if p.get('date_paiement'):
+            if DateEntry and hasattr(self, 'date_paiement') and isinstance(self.date_paiement, DateEntry):
+                 try: self.date_paiement.set_date(datetime.strptime(p['date_paiement'], '%Y-%m-%d'))
+                 except: pass
+            elif hasattr(self, 'date_paiement'):
+                 self.date_paiement.delete(0, tk.END)
+                 self.date_paiement.insert(0, datetime.strptime(p['date_paiement'], '%Y-%m-%d').strftime('%d/%m/%Y'))
+
         if p.get('contrat_num'): self.contrat_num.insert(0, p['contrat_num'])
         
         # Dates... if DateEntry vs Entry
@@ -5570,16 +5708,22 @@ class PaymentDialog:
                 messagebox.showerror("Erreur", "Montant invalide")
                 return
 
-            date_paiement = datetime.now().strftime("%Y-%m-%d") # Or add date field? 
-            # Original code didn't have date field for payment itself? 
-            # Looking at _build (previously viewed), I didn't see explicit Payment Date field, only Contract Dates.
-            # Usually creates with TODAY date.
-            # If editing, DO WE KEEP ORIGINAL DATE?
-            # Yes, standard behavior.
-            if self.payment_id:
-                old_p = self.app.db.get_payment_by_id(self.payment_id)
-                date_paiement = old_p['date_paiement']
+            # [MODIFIED] Get Date Paiement
+            date_paiement = None
+            if DateEntry and hasattr(self, 'date_paiement') and isinstance(self.date_paiement, DateEntry):
+                date_paiement = self.date_paiement.get_date().strftime("%Y-%m-%d")
+            elif hasattr(self, 'date_paiement'): # Text Entry fallback
+                try: 
+                    date_paiement = datetime.strptime(self.date_paiement.get(), "%d/%m/%Y").strftime("%Y-%m-%d")
+                except: 
+                    date_paiement = datetime.now().strftime("%Y-%m-%d") # Fallback to today if invalid
+            else:
+                 date_paiement = datetime.now().strftime("%Y-%m-%d") # Logic if field missing?
 
+            if self.payment_id:
+                # If editing, we overwrite with new date if changed
+                pass
+            
             mode = self.mode_var.get()
             ref = self.reference.get()
             banque = self.banque_var.get()
@@ -5663,7 +5807,7 @@ class BordereauDialog:
         tk.Label(self.dialog, text="Banque*").pack(pady=5)
         self.banque_var = tk.StringVar()
         BANKS = ["BNA", "BEA", "CPA", "BADR", "BDL", "CNEP", "Société Générale", "Natixis", "AGB", "Trust Bank", "Al Salam", "Housing Bank", "ABC", "BNP Paribas"]
-        self.banque = ttk.Combobox(self.dialog, textvariable=self.banque_var, values=BANKS)
+        self.banque = ttk.Combobox(self.dialog, textvariable=self.banque_var, values=BANKS, width=30)
         self.banque.pack(pady=5)
         
         tk.Button(self.dialog, text="Générer Bordereau", bg=PRIMARY_COLOR, fg="white", command=self.create).pack(pady=10)
@@ -6318,7 +6462,7 @@ class UserDialog:
         # Role
         tk.Label(container, text="Rôle", bg=BG_COLOR, fg=TEXT_COLOR, anchor="w").pack(fill=tk.X)
         self.role_var = tk.StringVar(value="user")
-        role_combo = ttk.Combobox(container, textvariable=self.role_var, values=["user", "admin", "magasinier"], state="readonly")
+        role_combo = ttk.Combobox(container, textvariable=self.role_var, values=["user", "admin", "magasinier"], state="readonly", width=25)
         role_combo.pack(fill=tk.X, pady=(5, 15))
         
         # Password
@@ -6652,3 +6796,365 @@ class JournalDialog:
                  messagebox.showerror("Erreur", "Module d'export introuvable.")
             except Exception as e:
                  messagebox.showerror("Erreur", f"Echec de l'export: {e}")
+
+
+class RecoveryFollowUpDialog:
+    def __init__(self, parent, data, month, year):
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title(f"Suivi du Recouvrement (M-1) - {month:02d}/{year}")
+        self.dialog.state('zoomed')
+        self.data = data
+        self.month = month
+        self.year = year
+        self._build()
+        
+    def _build(self):
+        # Header
+        header = tk.Frame(self.dialog, bg=BG_COLOR)
+        header.pack(fill=tk.X, padx=20, pady=10)
+        
+        tk.Label(
+            header, 
+            text=f"ÉTAT DE COUVERTURE DES CRÉANCES (MOIS {self.month:02d}/{self.year})", 
+            font=("Arial", 14, "bold"), 
+            bg=BG_COLOR,
+            fg=TEXT_COLOR
+        ).pack(side=tk.LEFT)
+        
+        # Stats summary (Recovery Rate)
+        if self.data.get('totals'):
+            rate = self.data['totals'].get('rate', 0.0)
+            tk.Label(
+                header,
+                text=f"Taux de Recouvrement Global : {rate:.2f}%",
+                font=("Arial", 12, "bold"),
+                bg=BG_COLOR,
+                fg="lime" if rate >= 80 else "orange"
+            ).pack(side=tk.LEFT, padx=30)
+        
+        tk.Button(
+            header, text="Vers Word", bg="#2b5797", fg="white", font=("Arial", 10, "bold"),
+            command=self.export_word
+        ).pack(side=tk.RIGHT, padx=5)
+        
+        tk.Button(
+            header, text="Imprimer PDF", bg=PRIMARY_COLOR, fg="white", font=("Arial", 10, "bold"),
+            command=self.print_pdf
+        ).pack(side=tk.RIGHT, padx=5)
+        
+        # Table
+        columns = ("Client", "Dette M-1 (Cible)", "Paiements M (Réalisé)", "Reste à Payer", "Statut")
+        tree_frame = tk.Frame(self.dialog)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical")
+        hsb = ttk.Scrollbar(tree_frame, orient="horizontal")
+        
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        
+        vsb.config(command=self.tree.yview)
+        hsb.config(command=self.tree.xview)
+        
+        # Configure columns
+        self.tree.heading("Client", text="Client")
+        self.tree.column("Client", width=300)
+        
+        self.tree.heading("Dette M-1 (Cible)", text="Dette M-1 (Cible)")
+        self.tree.column("Dette M-1 (Cible)", width=150, anchor="e")
+        
+        self.tree.heading("Paiements M (Réalisé)", text="Paiements M (Réalisé)")
+        self.tree.column("Paiements M (Réalisé)", width=150, anchor="e")
+        
+        self.tree.heading("Reste à Payer", text="Reste à Payer (Ecart)")
+        self.tree.column("Reste à Payer", width=150, anchor="e")
+        
+        self.tree.heading("Statut", text="Statut")
+        self.tree.column("Statut", width=150, anchor="center")
+        
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Tags for coloring
+        self.tree.tag_configure("regle", foreground="green")
+        self.tree.tag_configure("attente", foreground="orange")
+        self.tree.tag_configure("alerte", foreground="red", font=("Arial", 10, "bold"))
+        
+        # Load Data
+        if 'data' in self.data:
+            for row in self.data['data']:
+                statut = row['statut']
+                tag = "attente"
+                if statut == "RÉGLÉ": tag = "regle"
+                elif statut == "ALERTE RECOUVREMENT": tag = "alerte"
+                
+                self.tree.insert("", tk.END, values=(
+                    row['raison_sociale'],
+                    f"{row['dette_m_1']:,.2f}",
+                    f"{row['paiements_m']:,.2f}",
+                    f"{row['reste_a_payer']:,.2f}",
+                    statut
+                ), tags=(tag,))
+            
+        # Footer Total
+        footer = tk.Frame(self.dialog, bg=BG_COLOR, height=40)
+        footer.pack(fill=tk.X, padx=20, pady=10)
+        
+        if self.data.get('totals'):
+            t = self.data['totals']
+            tk.Label(footer, text=f"Total Cible: {t['target']:,.2f} DA", font=("Arial", 11, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=20)
+            tk.Label(footer, text=f"Total Réalisé: {t['realized']:,.2f} DA", font=("Arial", 11, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=20)
+
+    def print_pdf(self):
+        from reports import generate_recovery_pdf
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pdf_dir = ensure_pdf_export_dir()
+        filename = os.path.join(pdf_dir, f"Etat_Recouvrement_{self.month}-{self.year}_{timestamp}.pdf")
+        
+        generate_recovery_pdf(self.data, self.month, self.year, filename)
+        try:
+            preview_and_print_pdf(filename)
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Erreur PDF: {e}")
+
+    def export_word(self):
+        import word_exports
+        try:
+            filename = word_exports.generate_recovery_word(self.data, self.month, self.year)
+            if filename:
+                 messagebox.showinfo("Succès", f"Export Word effectué :\n{os.path.basename(filename)}")
+                 try: os.startfile(filename)
+                 except: pass
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Erreur Word: {e}")
+
+# ==================== COCKPIT / MASTER DASHBOARD ====================
+
+class MasterDashboardFrame(tk.Frame):
+    """
+    Cockpit Décisionnel: High-level dashboard for executive overview.
+    KPIs, Charts (Thermometer, Top 5, Evolution), and Alerts.
+    """
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=BG_COLOR)
+        self.app = app
+        self._build()
+        self.load_data()
+        
+    def _build(self):
+        # Header: Title + Refresh/Export Buttons
+        header_frame = tk.Frame(self, bg=BG_COLOR)
+        header_frame.pack(fill=tk.X, padx=20, pady=(20, 10))
+        
+        title_lbl = tk.Label(header_frame, text="TABLEAU DE BORD MAÎTRE (COCKPIT)", 
+                             font=("Arial", 20, "bold"), bg=BG_COLOR, fg="white")
+        title_lbl.pack(side=tk.LEFT)
+        
+        btn_frame = tk.Frame(header_frame, bg=BG_COLOR)
+        btn_frame.pack(side=tk.RIGHT)
+        
+        tk.Button(btn_frame, text="Actualiser", bg=SECONDARY_COLOR, fg="white", 
+                 font=("Arial", 10), command=self.load_data).pack(side=tk.LEFT, padx=5)
+                 
+        tk.Button(btn_frame, text="Export PDF", bg="#d32f2f", fg="white", 
+                 font=("Arial", 10), command=self.export_pdf).pack(side=tk.LEFT, padx=5)
+                 
+        tk.Button(btn_frame, text="Export Word", bg="#2b5797", fg="white", 
+                 font=("Arial", 10), command=self.export_word).pack(side=tk.LEFT, padx=5)
+
+        # Main Scrollable Area (if needed, but Cockpit should fit in one view)
+        # Using a canvas just in case, or direct packing if layout is tight.
+        # Direct pack for now.
+        
+        # 1. KPI Tiles Row
+        # ----------------
+        self.kpi_frame = tk.Frame(self, bg=BG_COLOR)
+        self.kpi_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        # We will create 4 tiles dynamically in load_data or predefined here
+        self.tile_sales = self._create_tile(self.kpi_frame, "Performance Ventes (HT)", "#1e88e5")
+        self.tile_health = self._create_tile(self.kpi_frame, "Santé Financière", "#43a047")
+        self.tile_debt = self._create_tile(self.kpi_frame, "Risque Créance (+30j - HT)", "#fb8c00")
+        self.tile_ops = self._create_tile(self.kpi_frame, "Alerte Opérationnelle", "#e53935")
+        
+        # 2. Charts Row
+        # -------------
+        charts_frame = tk.Frame(self, bg=BG_COLOR)
+        charts_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        # 3 Columns
+        exclude_pad = 10
+        
+        # Chart A: Thermometer
+        self.chart_a_frame = tk.Frame(charts_frame, bg=SIDEBAR_COLOR, bd=1, relief=tk.RIDGE)
+        self.chart_a_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, exclude_pad))
+        tk.Label(self.chart_a_frame, text="Objectif vs Réalisé", bg=SIDEBAR_COLOR, fg="white", font=("Arial", 11, "bold")).pack(pady=5)
+        self.lbl_chart_a = tk.Label(self.chart_a_frame, bg=SIDEBAR_COLOR)
+        self.lbl_chart_a.pack(expand=True)
+
+        # Chart B: Top 5 Clients
+        self.chart_b_frame = tk.Frame(charts_frame, bg=SIDEBAR_COLOR, bd=1, relief=tk.RIDGE)
+        self.chart_b_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, exclude_pad))
+        tk.Label(self.chart_b_frame, text="Top 5 Clients (Global)", bg=SIDEBAR_COLOR, fg="white", font=("Arial", 11, "bold")).pack(pady=5)
+        self.lbl_chart_b = tk.Label(self.chart_b_frame, bg=SIDEBAR_COLOR)
+        self.lbl_chart_b.pack(expand=True)
+        
+        # Chart C: Weekly Evolution
+        self.chart_c_frame = tk.Frame(charts_frame, bg=SIDEBAR_COLOR, bd=1, relief=tk.RIDGE)
+        self.chart_c_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tk.Label(self.chart_c_frame, text="Ventes - 7 derniers jours", bg=SIDEBAR_COLOR, fg="white", font=("Arial", 11, "bold")).pack(pady=5)
+        self.lbl_chart_c = tk.Label(self.chart_c_frame, bg=SIDEBAR_COLOR)
+        self.lbl_chart_c.pack(expand=True)
+
+        # 3. Alerts Section (Garde-Fou)
+        # -----------------------------
+        alerts_container = tk.Frame(self, bg=BG_COLOR)
+        alerts_container.pack(fill=tk.X, padx=20, pady=10)
+        
+        tk.Label(alerts_container, text="ALERTES DE SÉCURITÉ (Code Rouge)", bg=BG_COLOR, fg="#ff5252", font=("Arial", 12, "bold")).pack(anchor="w", pady=(0, 5))
+        
+        self.alerts_tree = ttk.Treeview(alerts_container, columns=("Client", "Montant", "Raison"), show="headings", height=4)
+        self.alerts_tree.heading("Client", text="Client")
+        self.alerts_tree.heading("Montant", text="Montant (DA)")
+        self.alerts_tree.heading("Raison", text="Motif Alert")
+        
+        self.alerts_tree.column("Client", width=300)
+        self.alerts_tree.column("Montant", width=150, anchor="e")
+        self.alerts_tree.column("Raison", width=200)
+        
+        self.alerts_tree.pack(fill=tk.X)
+        
+        # Tag for red rows
+        self.alerts_tree.tag_configure('alert', background='#ffebee', foreground='#b71c1c')
+
+    def _create_tile(self, parent, title, color):
+        frame = tk.Frame(parent, bg=color, bd=2, relief=tk.RAISED, width=250, height=100)
+        frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+        frame.pack_propagate(False)
+        
+        tk.Label(frame, text=title, bg=color, fg="white", font=("Arial", 10, "bold")).pack(anchor="nw", padx=10, pady=5)
+        
+        val_lbl = tk.Label(frame, text="--", bg=color, fg="white", font=("Arial", 22, "bold"))
+        val_lbl.pack(expand=True)
+        
+        sub_lbl = tk.Label(frame, text="", bg=color, fg="white", font=("Arial", 9))
+        sub_lbl.pack(anchor="se", padx=10, pady=5)
+        
+        return {'frame': frame, 'val': val_lbl, 'sub': sub_lbl}
+
+    def load_data(self):
+        try:
+            data = self.app.logic.get_cockpit_data()
+            self.current_data = data # Store for export
+            
+            # 1. Update Tiles
+            # ---------------
+            kpis = data['kpis']
+            
+            # Sales
+            self.tile_sales['val'].config(text=format_currency(kpis['ca_curr']))
+            evo = kpis['evolution']
+            arrow = "▲" if evo >= 0 else "▼"
+            self.tile_sales['sub'].config(text=f"{arrow} {abs(evo):.1f}% vs M-1")
+            
+            # Health (Recovery Rate)
+            rate = kpis['recovery_rate']
+            self.tile_health['val'].config(text=f"{rate:.1f}%")
+            self.tile_health['sub'].config(text="Taux de Recouvrement")
+            
+            # Debt Risk
+            debt = kpis['debt_30_days']
+            self.tile_debt['val'].config(text=format_currency(debt))
+            self.tile_debt['sub'].config(text="Dette > 30 Jours")
+            
+            # Ops Alert (Cancellation Rate)
+            cancel = kpis['cancel_rate']
+            self.tile_ops['val'].config(text=f"{cancel:.1f}%")
+            self.tile_ops['sub'].config(text="Taux Annulation")
+            
+            # 2. Update Charts
+            # ----------------
+            from utils import generate_cockpit_charts
+            p_a, p_b, p_c = generate_cockpit_charts(data)
+            
+            if p_a and os.path.exists(p_a):
+                img = Image.open(p_a)
+                # Resize if needed to fit frame? Matplotlib size 5x8 inch is approx 500x800 px. 
+                # Let's scale to height=450 for better visibility as requested
+                ratio = 450 / img.height
+                new_size = (int(img.width * ratio), 450)
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                self.lbl_chart_a.config(image=photo)
+                self.lbl_chart_a.image = photo
+                
+            if p_b and os.path.exists(p_b):
+                img = Image.open(p_b)
+                ratio = 450 / img.height # Fit height
+                new_size = (int(img.width * ratio), 450)
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                self.lbl_chart_b.config(image=photo)
+                self.lbl_chart_b.image = photo
+                
+            if p_c and os.path.exists(p_c):
+                img = Image.open(p_c)
+                ratio = 450 / img.height
+                new_size = (int(img.width * ratio), 450)
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                self.lbl_chart_c.config(image=photo)
+                self.lbl_chart_c.image = photo
+
+            # 3. Alerts List
+            # --------------
+            for item in self.alerts_tree.get_children():
+                self.alerts_tree.delete(item)
+                
+            if not data['alerts']:
+                self.alerts_tree.insert("", "end", values=(
+                    "R.A.S.",
+                    "-",
+                    "Aucune alerte de sécurité détectée."
+                ), tags=('regle',)) # Use green tag if available or standard
+            else:
+                for alert in data['alerts']:
+                    self.alerts_tree.insert("", "end", values=(
+                        alert['name'],
+                        format_currency(alert['amount']),
+                        alert['reason']
+                    ), tags=('alert',))
+                
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Erreur de chargement du Cockpit: {e}")
+            traceback.print_exc()
+
+    def export_pdf(self):
+        if not hasattr(self, 'current_data') or not self.current_data:
+            messagebox.showwarning("Attention", "Aucune donnée à exporter.")
+            return
+            
+        try:
+            from reports import generate_cockpit_pdf
+            filename = generate_cockpit_pdf(self.current_data)
+            preview_and_print_pdf(filename)
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Erreur lors de la génération PDF : {e}")
+            traceback.print_exc()
+        
+    def export_word(self):
+        if not hasattr(self, 'current_data') or not self.current_data:
+            messagebox.showwarning("Attention", "Aucune donnée à exporter.")
+            return
+            
+        try:
+            from word_exports import generate_cockpit_word
+            filename = generate_cockpit_word(self.current_data)
+            
+            if messagebox.askyesno("Succès", "Fichier Word généré.\nVoulez-vous l'ouvrir ?"):
+                os.startfile(filename)
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Erreur lors de la génération Word : {e}")
+            traceback.print_exc()
+
+# See MainApplication below to add the Sidebar button

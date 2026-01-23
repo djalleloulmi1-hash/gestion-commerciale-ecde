@@ -6,10 +6,11 @@ try:
     from openpyxl.utils import get_column_letter
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import landscape, A4
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import cm
     from reportlab.pdfgen import canvas
+    from reportlab.lib.enums import TA_CENTER
 except ImportError:
     print("Missing dependencies: openpyxl or reportlab")
 
@@ -244,10 +245,21 @@ def generate_stock_valuation_pdf(data, output_path):
     
     table_data = [h1, h2]
     
+    t_recept_qty = 0.0
+    t_recept_val = 0.0
+    t_vente_qty = 0.0
+    t_vente_val = 0.0
+
     for row in data['data']:
         date_obj = datetime.strptime(row['date'], '%Y-%m-%d')
         date_fmt = date_obj.strftime('%d/%m/%Y')
         
+        # Accumulate Totals
+        t_recept_qty += float(row['reception_qty'])
+        t_recept_val += float(row['reception_val'])
+        t_vente_qty += float(row['vente_qty'])
+        t_vente_val += float(row['vente_val'])
+
         table_data.append([
             date_fmt,
             format_currency_report(row['stock_initial_qty']),
@@ -261,6 +273,19 @@ def generate_stock_valuation_pdf(data, output_path):
             format_currency_report(row['stock_final_val']),
         ])
         
+    # TOTAL ROW
+    total_row = [
+        "TOTAL",
+        "", "", # Stock Init (No Total)
+        "",     # P.Unit (No Total)
+        format_currency_report(t_recept_qty),
+        format_currency_report(t_recept_val),
+        format_currency_report(t_vente_qty),
+        format_currency_report(t_vente_val),
+        "", "", # Stock Final (No Total)
+    ]
+    table_data.append(total_row)
+
     t = Table(table_data, colWidths=[2.5*cm] + [2.5*cm]*9)
     
     # Base Styles
@@ -280,6 +305,9 @@ def generate_stock_valuation_pdf(data, output_path):
         
         ('BACKGROUND', (0,0), (-1,1), colors.lightgrey),
         ('FONTSIZE', (0,0), (-1,-1), 8),
+        # Style Total Row (Last Row)
+        ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.lightgrey),
     ]
     
     # Conditional Styles (Skip 2 header rows, Col 0 is Date - handled by parser)
@@ -1147,4 +1175,431 @@ def generate_grand_livre_pdf(data, period, output_path=None):
         
     doc.build(elements, canvasmaker=NumberedCanvas)
     return output_path
+
+def generate_recovery_pdf(data, month, year, output_path):
+    """
+    Generate PDF for Suivi Recouvrement Mensuel (M-1)
+    """
+    if not data or not data.get('data'):
+        return None
+
+    doc = SimpleDocTemplate(output_path, pagesize=A4,
+                            rightMargin=1*cm, leftMargin=1*cm,
+                            topMargin=1*cm, bottomMargin=1*cm)
+                            
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    # --- HEADER ---
+    # Logo
+    from utils import check_logo_exists
+    if check_logo_exists():
+        try:
+            from reportlab.platypus import Image as RLImage
+            im = RLImage("logo_gica.png", width=4*cm, height=2*cm)
+            im.hAlign = 'LEFT'
+            elements.append(im)
+        except: pass
+        
+    elements.append(Spacer(1, 0.5*cm))
+    
+    # Title
+    title_style = styles['Heading1']
+    title_style.alignment = 1 # Center
+    title = Paragraph(f"ÉTAT DE COUVERTURE DES CRÉANCES (MOIS {month:02d}/{year})", title_style)
+    elements.append(title)
+    
+    # Global Stats
+    if data.get('totals'):
+        rate = data['totals'].get('rate', 0.0)
+        # Color logic
+        color = "green" if rate >= 80 else "orange" if rate > 50 else "red"
+        rate_text = f'<font color="{color}">Taux de Recouvrement Global : {rate:.2f}%</font>'
+        
+        stat_style = ParagraphStyle('StatStyle', parent=styles['Normal'], fontSize=12, alignment=1, spaceBefore=6)
+        elements.append(Paragraph(rate_text, stat_style))
+        
+    elements.append(Spacer(1, 1*cm))
+    
+    # --- TABLE ---
+    headers = ["Client", "Dette M-1\n(Cible)", "Paiements M\n(Réalisé)", "Reste à Payer\n(Ecart)", "Statut"]
+    
+    table_data = [headers]
+    
+    for row in data['data']:
+        table_data.append([
+            row['raison_sociale'],
+            format_currency_report(row['dette_m_1']),
+            format_currency_report(row['paiements_m']),
+            format_currency_report(row['reste_a_payer']),
+            row['statut']
+        ])
+        
+    # Totals Row
+    if data.get('totals'):
+        t = data['totals']
+        table_data.append([
+            "TOTAL",
+            format_currency_report(t['target']),
+            format_currency_report(t['realized']),
+            "",  # No total for gap usually, or maybe yes? Let's leave empty as interface.
+            ""
+        ])
+
+    # Column Widths
+    # A4 Width = ~21cm. Margins 2cm total. Avail ~19cm.
+    # Client (8), Dette (3), Pay (3), Reste (3), Statut (3) -> 20cm too wide?
+    # Let's try: Client 7, Numbers 3 each (9), Statut 3 -> 19cm.
+    col_widths = [6*cm, 3.25*cm, 3.25*cm, 3.25*cm, 3.25*cm]
+    
+    t = Table(table_data, colWidths=col_widths, repeatRows=1)
+    
+    # Styles
+    msg_styles = [
+        ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('ALIGN', (0,0), (-1,0), 'CENTER'),
+        ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('ALIGN', (1,1), (3,-1), 'RIGHT'), # Numbers Right
+        ('ALIGN', (4,1), (4,-1), 'CENTER'), # Status Center
+        
+        # Total Row
+        ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.lightgrey),
+    ]
+    
+    # Conditional Formatting for rows
+    # Row 0 is header. data row i corresponds to table row i+1
+    for i, row in enumerate(data['data']):
+        row_idx = i + 1
+        statut = row['statut']
+        status_col_idx = 4
+        
+        if statut == "RÉGLÉ":
+            # Text Green
+            msg_styles.append(('TEXTCOLOR', (0, row_idx), (-1, row_idx), colors.green))
+        elif statut == "ALERTE RECOUVREMENT":
+            # Text Red
+            msg_styles.append(('TEXTCOLOR', (0, row_idx), (-1, row_idx), colors.red))
+            msg_styles.append(('FONTNAME', (0, row_idx), (-1, row_idx), 'Helvetica-Bold'))
+        else:
+            # En Attente -> Orange
+            msg_styles.append(('TEXTCOLOR', (0, row_idx), (-1, row_idx), colors.orange))
+            
+    t.setStyle(TableStyle(msg_styles))
+    elements.append(t)
+    
+    elements.append(Spacer(1, 2*cm))
+    
+    # --- FOOTER ---
+    # Signature "Service Recouvrement"
+    footer_data = [["Service Recouvrement", "", "Direction Commerciale"]]
+    t_foot = Table(footer_data, colWidths=[6*cm, 7*cm, 6*cm])
+    t_foot.setStyle(TableStyle([
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+    ]))
+    elements.append(t_foot)
+
+
+    doc.build(elements, canvasmaker=NumberedCanvas)
+    return output_path
+
+
+def generate_pareto_pdf(data: Dict[str, Any], start_date: str, end_date: str, filename: str):
+    """
+    Generate Pareto Analysis PDF with Charts and Table.
+    """
+    from utils import check_logo_exists, format_currency, generate_pareto_charts
+    
+    doc = SimpleDocTemplate(filename, pagesize=A4, topMargin=1*cm, bottomMargin=1*cm)
+    story = []
+    width, height = A4
+    styles = getSampleStyleSheet()
+    
+    # 1. Header
+    logo_path = check_logo_exists()
+    title = "ANALYSE DE PERFORMANCE COMMERCIALE (PARETO)"
+    
+    title_style = ParagraphStyle(
+        'ParetoTitle', parent=styles['Heading1'], fontSize=16, 
+        textColor=colors.HexColor('#1a237e'), alignment=TA_CENTER, spaceAfter=20
+    )
+    
+    if logo_path:
+        img = Image(logo_path, width=2.5*cm, height=2.5*cm)
+        img.hAlign = 'LEFT'
+        header_data = [[img, Paragraph(title, title_style)]]
+        header_table = Table(header_data, colWidths=[3*cm, 15*cm])
+        header_table.setStyle(TableStyle([
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        story.append(header_table)
+    else:
+        story.append(Paragraph(title, title_style))
+        
+    story.append(Paragraph(f"<b>Période du :</b> {start_date} <b>au</b> {end_date}", styles['Normal']))
+    story.append(Spacer(1, 0.5*cm))
+    
+    # 2. Generate and Insert Charts
+    # -----------------------------
+    curve_path, pie_path = generate_pareto_charts(data['data'])
+    
+    # Legend Styles
+    legend_style = ParagraphStyle(
+        'LegendStyle', parent=styles['Normal'], fontSize=9, textColor=colors.black, 
+        alignment=TA_CENTER, spaceBefore=0, spaceAfter=0
+    )
+    legend_title_style = ParagraphStyle(
+        'LegendTitle', parent=styles['Normal'], fontSize=9, textColor=colors.black, 
+        fontName='Helvetica-Bold', alignment=TA_CENTER, spaceBefore=6, spaceAfter=2
+    )
+
+    if curve_path and os.path.exists(curve_path):
+        img_curve = Image(curve_path, width=16*cm, height=9.6*cm)
+        story.append(img_curve)
+        
+        # Pareto Legend
+        story.append(Paragraph("Interprétation du Diagramme :", legend_title_style))
+        story.append(Paragraph("Les barres classent vos clients par volume de chiffre d'affaires. La ligne rouge montre le cumul. La zone où la ligne coupe la barre des 80% identifie vos clients stratégiques (Classe A).", legend_style))
+        story.append(Spacer(1, 0.5*cm))
+        
+    if pie_path and os.path.exists(pie_path):
+        img_pie = Image(pie_path, width=10*cm, height=10*cm)
+        story.append(img_pie)
+        
+        # ABC Legend
+        story.append(Spacer(1, 0.2*cm))
+        
+        # A
+        story.append(Paragraph('<font color="#2e7d32"><b>Classe A (Vert) :</b></font> Représente 80% de votre activité. Ce sont vos clients piliers. Toute baisse de leur part est un risque majeur pour l\'unité.', legend_style))
+        # B
+        story.append(Paragraph('<font color="#1565c0"><b>Classe B (Bleu) :</b></font> Représente les 15% suivants. Ce sont vos clients en développement ou à fort potentiel.', legend_style))
+        # C
+        story.append(Paragraph('<font color="#757575"><b>Classe C (Gris) :</b></font> Représente les derniers 5%. Ce sont des clients occasionnels qui génèrent un grand volume administratif pour un faible revenu.', legend_style))
+        
+        story.append(Spacer(1, 0.8*cm))
+        
+    # 3. Dynamic Synthesis
+    # --------------------
+    clients_a = 0
+    total_clients = len(data['data'])
+    for row in data['data']:
+        if row['classe'] == 'A': clients_a += 1
+        
+    if total_clients > 0:
+        perc_clients_a = (clients_a / total_clients) * 100
+        
+        # Risk Warning
+        warning_text = ""
+        if clients_a < 5 or perc_clients_a < 10: # "Petit groupe" definition
+             warning_text = " <b>Attention à la forte dépendance envers ce petit groupe.</b>"
+             
+        synthesis_text = f"<b>Analyse de l'unité :</b> Votre activité est concentrée sur <b>{clients_a}</b> clients qui réalisent à eux seuls 80% du chiffre d'affaires.{warning_text}"
+        
+        synth_style = ParagraphStyle(
+            'SynthStyle', parent=styles['Normal'], fontSize=11, 
+            textColor=colors.HexColor('#1a237e'), alignment=TA_CENTER, 
+            backColor=colors.HexColor('#e8eaf6'), borderWidth=1, borderColor=colors.HexColor('#1a237e'),
+            borderPadding=10, spaceAfter=20
+        )
+        story.append(Paragraph(synthesis_text, synth_style))
+        story.append(Spacer(1, 0.5*cm))
+
+    # 4. Table
+    # --------
+    # Columns: Rang | Client | CA (DA) | % Cumulé | Classe
+    table_headers = ['Rang', 'Client', 'Chiffre d\'Affaires', '% Cumulé', 'Classe']
+    table_data = [table_headers]
+    
+    for row in data['data']:
+        table_data.append([
+            str(row['rank']),
+            row['client_name'],
+            format_currency(row['ca']),
+            f"{row['cumul_perc']:.2f}%",
+            row['classe']
+        ])
+        
+    col_widths = [1.5*cm, 8*cm, 4*cm, 2.5*cm, 2*cm]
+    t = Table(table_data, colWidths=col_widths, repeatRows=1)
+    
+    # Styles
+    t_style = [
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1a237e')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('GRID', (0,0), (-1,-1), 1, colors.black),
+        ('ALIGN', (1,1), (1,-1), 'LEFT'), # Client Name
+        ('ALIGN', (2,1), (2,-1), 'RIGHT'), # CA
+    ]
+    
+    for i, row in enumerate(data['data']):
+        row_idx = i + 1
+        if row['classe'] == 'A':
+            t_style.append(('BACKGROUND', (0, row_idx), (-1, row_idx), colors.HexColor('#e8f5e9')))
+            t_style.append(('TEXTCOLOR', (4, row_idx), (4, row_idx), colors.green))
+        elif row['classe'] == 'B':
+            t_style.append(('BACKGROUND', (0, row_idx), (-1, row_idx), colors.HexColor('#e3f2fd')))
+            t_style.append(('TEXTCOLOR', (4, row_idx), (4, row_idx), colors.blue))
+    
+    t.setStyle(TableStyle(t_style))
+    story.append(t)
+    
+    # Footer
+    def footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont('Helvetica', 9)
+        canvas.drawString(1*cm, 0.75*cm, "Généré par le Système de Gestion Commerciale")
+        canvas.drawRightString(A4[0]-1*cm, 0.75*cm, f"Page {doc.page}")
+        canvas.restoreState()
+        
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    return filename
+
+def generate_cockpit_pdf(data: Dict[str, Any]):
+    """
+    Generate Master Dashboard (Cockpit) PDF (One-Page Landscape).
+    """
+    from utils import ensure_pdf_export_dir, check_logo_exists
+    directory = ensure_pdf_export_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = os.path.join(directory, f"Cockpit_{timestamp}.pdf")
+    
+    doc = SimpleDocTemplate(filename, pagesize=landscape(A4),
+                          rightMargin=1*cm, leftMargin=1*cm,
+                          topMargin=1*cm, bottomMargin=1*cm)
+    story = []
+    styles = getSampleStyleSheet()
+    
+    # Header
+    # ------
+    logo_path = check_logo_exists()
+    header_data = [[
+        Image(logo_path, width=3*cm, height=2*cm) if logo_path else "",
+        Paragraph("<b>TABLEAU DE BORD MAÎTRE (COCKPIT)</b>", styles['Title']),
+        Paragraph(f"<b>Période: {data.get('period', '--')}</b>", styles['Normal'])
+    ]]
+    t_head = Table(header_data, colWidths=[4*cm, 18*cm, 5*cm])
+    t_head.setStyle(TableStyle([
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+    ]))
+    story.append(t_head)
+    story.append(Spacer(1, 1*cm))
+    
+    # 1. KPI Tiles
+    # ------------
+    kpis = data['kpis']
+    
+    # Helper to create Tile content
+    def create_tile_content(title, value, sub, bg_color):
+        s_title = ParagraphStyle('TTitle', parent=styles['Normal'], fontSize=10, textColor=colors.white, fontName='Helvetica-Bold')
+        s_val = ParagraphStyle('TVal', parent=styles['Normal'], fontSize=20, textColor=colors.white, fontName='Helvetica-Bold', alignment=TA_CENTER)
+        s_sub = ParagraphStyle('TSub', parent=styles['Normal'], fontSize=9, textColor=colors.white, alignment=TA_CENTER)
+        
+        return [
+            Paragraph(title, s_title),
+            Spacer(1, 0.4*cm),
+            Paragraph(value, s_val),
+            Spacer(1, 0.2*cm),
+            Paragraph(str(sub), s_sub)
+        ]
+        
+    # Tiles Data
+    evo = kpis['evolution']
+    arrow = "▲" if evo >= 0 else "▼"
+    
+    tiles_row = [
+        create_tile_content("PERFORMANCE VENTES", format_currency(kpis['ca_curr']), f"{arrow} {abs(evo):.1f}% vs M-1", colors.HexColor("#1e88e5")),
+        create_tile_content("SANTÉ FINANCIÈRE", f"{kpis['recovery_rate']:.1f}%", "Recouvrement", colors.HexColor("#43a047")),
+        create_tile_content("RISQUE CRÉANCE (+30J)", format_currency(kpis['debt_30_days']), "Montant à Risque", colors.HexColor("#fb8c00")),
+        create_tile_content("ALERTE OPÉRATIONNELLE", f"{kpis['cancel_rate']:.1f}%", "Taux Annulation", colors.HexColor("#e53935")),
+    ]
+    
+    # Table for Tiles
+    # We want 4 cells with background color.
+    # We can't put listing in cell easily with Flowables unless we use a nested table or just simple text.
+    # Let's use nested tables for tiles to carry background
+    
+    tile_tables = []
+    for content, color in zip(tiles_row, ["#1e88e5", "#43a047", "#fb8c00", "#e53935"]):
+        t = Table([[c] for c in content], colWidths=[6*cm])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor(color)),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('BOX', (0,0), (-1,-1), 0, colors.white), # Borderless?
+        ]))
+        tile_tables.append(t)
+        
+    main_tile_table = Table([tile_tables], colWidths=[6.5*cm]*4)
+    story.append(main_tile_table)
+    story.append(Spacer(1, 1*cm))
+    
+    # 2. Charts
+    # ---------
+    from utils import generate_cockpit_charts
+    p_a, p_b, p_c = generate_cockpit_charts(data)
+    
+    charts_row = []
+    
+    if p_a and os.path.exists(p_a):
+        charts_row.append(Image(p_a, width=5*cm, height=8*cm))
+    else:
+        charts_row.append("No Data")
+        
+    if p_b and os.path.exists(p_b):
+        charts_row.append(Image(p_b, width=8*cm, height=6*cm))
+    else:
+        charts_row.append("No Data")
+        
+    if p_c and os.path.exists(p_c):
+        charts_row.append(Image(p_c, width=10*cm, height=6*cm))
+    else:
+        charts_row.append("No Data")
+        
+    t_charts = Table([charts_row], colWidths=[6*cm, 9*cm, 11*cm])
+    t_charts.setStyle(TableStyle([
+         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+         ('VALIGN', (0,0), (-1,-1), 'TOP'),
+    ]))
+    story.append(t_charts)
+    story.append(Spacer(1, 1*cm))
+    
+    # 3. Alerts
+    # ---------
+    story.append(Paragraph("<b>ALERTES DE SÉCURITÉ (Code Rouge)</b>", ParagraphStyle('HAlert', parent=styles['Heading3'], textColor=colors.red)))
+    story.append(Spacer(1, 0.2*cm))
+    
+    alert_headers = ['Client', 'Montant à Risque', 'Motif']
+    alert_data = [alert_headers]
+    for alert in data['alerts']:
+        alert_data.append([
+            alert['name'],
+            format_currency(alert['amount']),
+            alert['reason']
+        ])
+    
+    if len(alert_data) > 1:
+        t_alerts = Table(alert_data, colWidths=[12*cm, 6*cm, 8*cm])
+        t_alerts.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#ffebee')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.red),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('GRID', (0,0), (-1,-1), 1, colors.red),
+            ('TEXTCOLOR', (0,1), (-1,-1), colors.black),
+            ('ALIGN', (1,1), (1,-1), 'RIGHT'),
+        ]))
+        story.append(t_alerts)
+    else:
+        story.append(Paragraph("Aucune alerte critique détectée.", styles['Normal']))
+        
+    # Build
+    doc.build(story)
+    return filename
 

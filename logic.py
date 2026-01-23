@@ -4,7 +4,7 @@ Handles financial calculations, stock management, and business rules
 """
 
 from typing import Dict, Any, Optional, List, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import get_db
 
 try:
@@ -842,6 +842,200 @@ class BusinessLogic:
             'total_factures': total_factures,
             'solde': solde
         }
+
+    def get_monthly_recovery_data(self, month: int, year: int) -> Dict[str, Any]:
+        """
+        Calculate Monthly Recovery Data (Suivi Recouvrement).
+        """
+        import calendar
+        from datetime import datetime, timedelta
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        
+        # Dates for Month M
+        # -----------------
+        # Start of M
+        date_start_m = datetime(year, month, 1)
+        # End of M
+        last_day_m = calendar.monthrange(year, month)[1]
+        date_end_m = datetime(year, month, last_day_m)
+        
+        date_start_m_str = date_start_m.strftime("%Y-%m-%d")
+        date_end_m_str = date_end_m.strftime("%Y-%m-%d")
+        
+        # Dates for Month M-1
+        # -------------------
+        # End of M-1 is simply Start of M minus 1 day.
+        date_end_m_1 = date_start_m - timedelta(days=1)
+        date_end_m_1_str = date_end_m_1.strftime("%Y-%m-%d")
+        
+        # Global stats
+        total_target = 0.0
+        total_realized_m = 0.0
+        
+        results = []
+        
+        # Get all clients
+        clients = self.db.get_all_clients(active_only=True)
+        
+        for client in clients:
+            cid = client['id']
+            report_n_1 = client.get('report_n_moins_1', 0.0) or 0.0
+            
+            # --- 1. Calculate Balance at End of M-1 (Target) ---
+            # Solde = Init + Paiements + Avoirs - Factures (All up to date_end_m_1 inclusive)
+            # We must IGNORE 'annee' logic here and calculate true running balance up to that date.
+            
+            # Factures <= End M-1
+            cursor.execute("""
+                SELECT COALESCE(SUM(montant_ttc), 0) FROM factures 
+                WHERE client_id = ? AND date_facture <= ? AND type_document = 'Facture' AND statut != 'Annulée'
+            """, (cid, date_end_m_1_str))
+            fac_m_1 = cursor.fetchone()[0]
+            
+            # Avoirs <= End M-1
+            cursor.execute("""
+                SELECT COALESCE(SUM(montant_ttc), 0) FROM factures 
+                WHERE client_id = ? AND date_facture <= ? AND type_document = 'Avoir' AND statut != 'Annulée'
+            """, (cid, date_end_m_1_str))
+            av_m_1 = cursor.fetchone()[0]
+            
+            # Paiements <= End M-1
+            cursor.execute("""
+                SELECT COALESCE(SUM(montant), 0) FROM paiements 
+                WHERE client_id = ? AND date_paiement <= ?
+            """, (cid, date_end_m_1_str))
+            pay_m_1 = cursor.fetchone()[0]
+            
+            solde_end_m_1 = report_n_1 + pay_m_1 + av_m_1 - fac_m_1
+            
+            # If solde is negative, it's a debt. Target is the absolute debt.
+            # If solde is positive, client has credit, so 0 debt to cover.
+            target = abs(solde_end_m_1) if solde_end_m_1 < 0 else 0.0
+            
+            # --- 2. Calculate Payments during M (Realized) ---
+            cursor.execute("""
+                SELECT COALESCE(SUM(montant), 0) FROM paiements 
+                WHERE client_id = ? AND date_paiement >= ? AND date_paiement <= ?
+            """, (cid, date_start_m_str, date_end_m_str))
+            realized = cursor.fetchone()[0]
+            
+            # --- 3. Analysis ---
+            
+            # If no target and no payment, skip line
+            if target < 0.01 and realized < 0.01:
+                continue
+                
+            gap = target - realized
+            if gap < 0: gap = 0.0
+            
+            # Status
+            if target <= 0.01:
+                status = "RÉGLÉ"
+            else:
+                if realized >= target - 0.01:
+                    status = "RÉGLÉ"
+                elif realized > 0:
+                    status = "EN ATTENTE"
+                else: 
+                     status = "ALERTE RECOUVREMENT"
+            
+            results.append({
+                "client_id": cid,
+                "raison_sociale": client['raison_sociale'],
+                "dette_m_1": target,
+                "paiements_m": realized,
+                "reste_a_payer": max(0.0, target - realized),
+                "statut": status
+            })
+            
+            total_target += target
+            total_realized_m += realized
+            
+        return {
+            "period": f"{month:02d}/{year}",
+            "data": results,
+            "totals": {
+                "target": total_target,
+                "realized": total_realized_m,
+                "rate": (total_realized_m / total_target * 100) if total_target > 0 else 0.0
+            }
+        }
+    
+    def get_clients_pareto_data(self, start_date: str, end_date: str) -> Dict[str, Any]:
+        """
+        Calculate ABC Pareto Analysis for Clients based on Turnover (CA).
+        
+        Classes:
+        - A: Top 80% of Cumulative CA.
+        - B: Next 15% (80% to 95%).
+        - C: Last 5% (95% to 100%).
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        
+        # Fetch Total Turnover per Client
+        query = """
+            SELECT client_id, SUM(montant_ttc) as total_ca
+            FROM factures
+            WHERE date_facture BETWEEN ? AND ? 
+              AND type_document = 'Facture' 
+              AND statut != 'Annulée'
+            GROUP BY client_id
+            ORDER BY total_ca DESC
+        """
+        cursor.execute(query, (start_date, end_date))
+        rows = cursor.fetchall()
+        
+        if not rows:
+            return {"data": [], "total_ca": 0.0}
+            
+        total_ca_global = sum(row[1] for row in rows)
+        
+        results = []
+        cumul_ca = 0.0
+        
+        for idx, row in enumerate(rows):
+            client_id = row[0]
+            ca = row[1]
+            
+            # Get Client Info
+            cl = self.db.get_client_by_id(client_id)
+            client_name = cl['raison_sociale'] if cl else f"Client {client_id}"
+            
+            cumul_ca += ca
+            cumul_perc = (cumul_ca / total_ca_global * 100) if total_ca_global > 0 else 0.0
+            
+            # Determine Class based on Previous Cumul
+            # Logic: If you Start before 80%, you are A.
+            # If you Start before 95%, you are B.
+            # Else C.
+            # Need Previous cumul.
+            prev_cumul_ca = cumul_ca - ca
+            prev_cumul_perc = (prev_cumul_ca / total_ca_global * 100) if total_ca_global > 0 else 0.0
+            
+            if prev_cumul_perc < 80.0:
+                classe = "A"
+            elif prev_cumul_perc < 95.0:
+                classe = "B"
+            else:
+                classe = "C"
+
+            results.append({
+                "rank": idx + 1,
+                "client_id": client_id,
+                "client_name": client_name,
+                "ca": ca,
+                "cumul_ca": cumul_ca,
+                "cumul_perc": cumul_perc,
+                "classe": classe
+            })
+            
+        return {
+            "period": f"{start_date} au {end_date}",
+            "total_ca": total_ca_global,
+            "data": results
+        }
     
     def check_credit_limit(self, client_id: int, nouveau_montant: float) -> Tuple[bool, Dict[str, Any]]:
         """
@@ -1458,6 +1652,179 @@ class BusinessLogic:
         )
         
         return (True, "Bordereau créé avec succès", bordereau_id)
+
+    # ==================== COCKPIT DECISIONNEL ====================
+
+    def get_cockpit_data(self) -> Dict[str, Any]:
+        """
+        Aggregate data for the Master Dashboard (Cockpit).
+        Returns dictionary with KPIs, Charts Data, and Alerts.
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        
+        today = datetime.now()
+        current_month = today.month
+        current_year = today.year
+        
+        # Previous month calculation
+        if current_month == 1:
+            prev_month = 12
+            prev_year = current_year - 1
+        else:
+            prev_month = current_month - 1
+            prev_year = current_year
+            
+        # 1. KPIs
+        # -------
+        
+        # Sales (CA) M vs M-1
+        query_ca = """
+            SELECT 
+                SUM(CASE WHEN strftime('%m', date_facture) = ? AND strftime('%Y', date_facture) = ? THEN montant_ht ELSE 0 END) as ca_curr,
+                SUM(CASE WHEN strftime('%m', date_facture) = ? AND strftime('%Y', date_facture) = ? THEN montant_ht ELSE 0 END) as ca_prev
+            FROM factures 
+            WHERE type_document = 'Facture' AND statut != 'Annulée'
+        """
+        # Format month as '01', '02'...
+        m_curr_str = f"{current_month:02d}"
+        y_curr_str = str(current_year)
+        m_prev_str = f"{prev_month:02d}"
+        y_prev_str = str(prev_year)
+        
+        cursor.execute(query_ca, (m_curr_str, y_curr_str, m_prev_str, y_prev_str))
+        row_ca = cursor.fetchone()
+        ca_curr = row_ca[0] if row_ca and row_ca[0] else 0.0
+        ca_prev = row_ca[1] if row_ca and row_ca[1] else 0.0
+        
+        ca_evolution = 0.0
+        if ca_prev > 0:
+            ca_evolution = ((ca_curr - ca_prev) / ca_prev) * 100
+        elif ca_curr > 0:
+             ca_evolution = 100.0 # From 0 to something is 100% technically infinite but 100 is safer display
+             
+        # Recovery Rate (Payments M / Sales M) - Operational efficiency
+        # Payments received in current month
+        query_pay = """
+            SELECT SUM(montant) FROM paiements 
+            WHERE strftime('%m', date_paiement) = ? AND strftime('%Y', date_paiement) = ?
+        """
+        cursor.execute(query_pay, (m_curr_str, y_curr_str))
+        pay_curr = cursor.fetchone()[0] or 0.0
+        
+        recovery_rate = (pay_curr / ca_curr * 100) if ca_curr > 0 else 0.0
+        
+        # Risk Debt (> 30 Days)
+        # Assuming we can calculate this by looking at unpaid invoices older than 30 days
+        # Factures 'Non soldée' or 'A Terme' with date < Today - 30
+        date_threshold = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+        
+        # We need accurate 'rest to pay' for each invoice. 
+        # Ideally we iterate invoices, or use a complex join. 
+        # Approximate: Sum(Total) - Sum(Payments) for these invoices.
+        # Let's iterate for accuracy as implemented in other reports.
+        
+        query_risk = """
+            SELECT id, montant_ht, client_id 
+            FROM factures 
+            WHERE date_facture <= ? 
+              AND type_document = 'Facture' 
+              AND statut != 'Annulée'
+              AND etat_paiement != 'Payée'
+              AND etat_paiement != 'Comptant'
+        """
+        cursor.execute(query_risk, (date_threshold,))
+        risk_invs = cursor.fetchall()
+        
+        debt_30_days = 0.0
+        alerts_clients = {}
+        
+        for inv_id, amount, client_id in risk_invs:
+            # Check payments for this invoice
+            cursor.execute("SELECT COALESCE(SUM(montant), 0) FROM paiements WHERE facture_id = ?", (inv_id,))
+            paid = cursor.fetchone()[0]
+            reste = amount - paid
+            if reste > 1.0: # Tolerance
+                debt_30_days += reste
+                if client_id not in alerts_clients: alerts_clients[client_id] = 0.0
+                alerts_clients[client_id] += reste
+                
+        # Cancellation Rate (Global or Monthly?) User said "issu de l'Etat n°3" (Analyse Annulations)
+        # Let's take Monthly Cancellation Rate
+        query_cancel = """
+            SELECT SUM(montant_ht) 
+            FROM factures 
+            WHERE strftime('%m', date_facture) = ? AND strftime('%Y', date_facture) = ?
+              AND statut = 'Annulée'
+        """
+        cursor.execute(query_cancel, (m_curr_str, y_curr_str))
+        cancel_amount = cursor.fetchone()[0] or 0.0
+        # Denom: Total Sales (Valid + Cancelled) to get rate? Or just Valid? Usually Cancelled / (Valid + Cancelled)
+        total_vol = ca_curr + cancel_amount
+        cancel_rate = (cancel_amount / total_vol * 100) if total_vol > 0 else 0.0
+
+        # 2. Charts Data
+        # --------------
+        
+        # A. Thermometer (Sales vs Target)
+        # Target = Previous Month Sales (as per plan assumption)
+        target_sales = ca_prev if ca_prev > 0 else 1000000.0 # Default fallback target if M-1 is 0
+        
+        query_top5 = """
+            SELECT c.raison_sociale, SUM(f.montant_ht) as ca
+            FROM factures f
+            JOIN clients c ON f.client_id = c.id
+            WHERE f.type_document = 'Facture' AND f.statut != 'Annulée'
+            GROUP BY f.client_id
+            ORDER BY ca DESC
+            LIMIT 5
+        """
+        cursor.execute(query_top5)
+        top5_rows = cursor.fetchall()
+        top5_data = []
+        for name, ca in top5_rows:
+            top5_data.append({'name': name, 'value': ca})
+            
+        # C. Weekly Evolution (Last 7 days)
+        dates_7d = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(6, -1, -1)]
+        daily_sales = []
+        
+        for d in dates_7d:
+            cursor.execute("""
+                SELECT SUM(montant_ttc) FROM factures 
+                WHERE date_facture = ? AND type_document = 'Facture' AND statut != 'Annulée'
+            """, (d,))
+            val = cursor.fetchone()[0] or 0.0
+            daily_sales.append({'date': d, 'value': val})
+            
+        # 3. Alerts List
+        # --------------
+        # Top 3 High Risk Clients (from debt > 30 days calculation)
+        sorted_alerts = sorted(alerts_clients.items(), key=lambda x: x[1], reverse=True)[:3]
+        alerts_list = []
+        for cid, amount in sorted_alerts:
+            cl = self.db.get_client_by_id(cid)
+            name = cl['raison_sociale'] if cl else f"Client {cid}"
+            alerts_list.append({'name': name, 'amount': amount, 'reason': 'Dette > 30 jours'})
+            
+        return {
+            'kpis': {
+                'ca_curr': ca_curr,
+                'ca_prev': ca_prev,
+                'evolution': ca_evolution,
+                'recovery_rate': recovery_rate,
+                'debt_30_days': debt_30_days,
+                'cancel_rate': cancel_rate
+            },
+            'charts': {
+                'target_sales': target_sales,
+                'sales_curr': ca_curr,
+                'top_5': top5_data,
+                'weekly_evolution': daily_sales
+            },
+            'alerts': alerts_list,
+            'period': f"{m_curr_str}/{y_curr_str}"
+        }
     
     # ==================== ANNUAL CLOSURE ====================
     
