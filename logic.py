@@ -842,6 +842,64 @@ class BusinessLogic:
             'total_factures': total_factures,
             'solde': solde
         }
+    
+    def get_etat_104_data(self, start_date: str, end_date: str) -> List[Dict[str, Any]]:
+        """
+        Récupérer données pour État 104 (ventes par client) sur une période.
+        
+        Retourne une ligne par client avec:
+        - numero (numérotation automatique)
+        - raison_sociale
+        - adresse
+        - nif
+        - article_imposition
+        - total_ht (somme des factures VALIDES)
+        - total_tva (somme des TVA)
+        - total_ttc (somme des TTC)
+        
+        Trié par raison_sociale
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+        
+        query = """
+            SELECT 
+                c.raison_sociale,
+                c.adresse,
+                c.nif,
+                c.article_imposition,
+                SUM(f.montant_ht) as total_ht,
+                SUM(f.montant_tva) as total_tva,
+                SUM(f.montant_ttc) as total_ttc
+            FROM factures f
+            JOIN clients c ON f.client_id = c.id
+            WHERE f.date_facture BETWEEN ? AND ?
+              AND f.statut != 'Annulée'
+              AND f.type_document = 'Facture'
+            GROUP BY c.id, c.raison_sociale, c.adresse, c.nif, c.article_imposition
+            HAVING total_ht > 0
+            ORDER BY c.raison_sociale ASC
+        """
+        
+        cursor.execute(query, (start_date, end_date))
+        rows = cursor.fetchall()
+        
+        # Numérotation automatique
+        result = []
+        for idx, row in enumerate(rows, start=1):
+            result.append({
+                'numero': idx,
+                'raison_sociale': row['raison_sociale'],
+                'adresse': row['adresse'] or '-',
+                'nif': row['nif'] or '-',
+                'article_imposition': row['article_imposition'] or 'A',
+                'total_ht': row['total_ht'],
+                'total_tva': row['total_tva'],
+                'total_ttc': row['total_ttc']
+            })
+        
+        return result
+
 
     def get_monthly_recovery_data(self, month: int, year: int) -> Dict[str, Any]:
         """

@@ -20,7 +20,7 @@ from utils import (generate_invoice_pdf, generate_reception_pdf, generate_border
                    preview_and_print_pdf, generate_creances_pdf, format_currency, parse_currency)
 from PIL import Image, ImageTk
 import os
-from reports import generate_stock_valuation_excel, generate_stock_valuation_pdf
+from reports import generate_stock_valuation_excel, generate_stock_valuation_pdf, generate_invoice_excel
 try:
     from tkcalendar import DateEntry
 except ImportError:
@@ -141,11 +141,11 @@ class MainApplication:
                         background="#263238", 
                         foreground="white", 
                         fieldbackground="#263238",
-                        font=('Arial', 10, 'bold'),
+                        font=('Arial', 12, 'bold'),
                         rowheight=25)
         
         style.configure("Treeview.Heading",
-                        font=('Arial', 10, 'bold'),
+                        font=('Arial', 12, 'bold'),
                         background="#37474f",
                         foreground="white")
         
@@ -255,7 +255,7 @@ class MainApplication:
             btn = tk.Button(
                 sidebar,
                 text=text,
-                font=("Arial", 11),
+                font=("Arial", 13),
                 bg=SIDEBAR_COLOR,
                 fg="white",
                 activebackground=ACCENT_COLOR,
@@ -277,7 +277,7 @@ class MainApplication:
         lbl_user = tk.Label(
             sidebar,
             text=user_text,
-            font=("Arial", 11), # Same font as buttons
+            font=("Arial", 13), # Same font as buttons
             bg=SIDEBAR_COLOR,
             fg="#cfd8dc",       # Slightly clearer than white or same as text
             padx=20,
@@ -355,8 +355,8 @@ class MainApplication:
         
         # Center-Left for title -> MOVED TO WINDOW TITLE
         # self.header_canvas.create_rectangle(10, 10, 800, 70, fill="#1a237e", outline="") # Background box
-        # self.header_canvas.create_text(32, 42, text=title_text, font=("Arial", 18, "bold"), fill="black", anchor="w")
-        # self.header_canvas.create_text(30, 40, text=title_text, font=("Arial", 18, "bold"), fill="white", anchor="w")
+        # self.header_canvas.create_text(32, 42, text=title_text, font=("Arial", 20, "bold"), fill="black", anchor="w")
+        # self.header_canvas.create_text(30, 40, text=title_text, font=("Arial", 20, "bold"), fill="white", anchor="w")
         
         # Exclusive Use Title (Green, Top Center)
 
@@ -486,7 +486,7 @@ class DashboardFrame(ttk.Frame):
         title = tk.Label(
             self, 
             text="Tableau de Bord", 
-            font=("Arial", 18, "bold"),
+            font=("Arial", 20, "bold"),
             bg=BG_COLOR,
             fg=TEXT_COLOR
         )
@@ -543,7 +543,7 @@ class DashboardFrame(ttk.Frame):
             l1 = tk.Label(
                 card, 
                 text=str(value), 
-                font=("Arial", 18, "bold"), # Reduced font
+                font=("Arial", 20, "bold"), # Reduced font
                 fg="white", 
                 bg=color
             )
@@ -552,7 +552,7 @@ class DashboardFrame(ttk.Frame):
             l2 = tk.Label(
                 card, 
                 text=label, 
-                font=("Arial", 10), # Reduced font
+                font=("Arial", 12), # Reduced font
                 fg="white", 
                 bg=color
             )
@@ -585,7 +585,7 @@ class DashboardFrame(ttk.Frame):
         metrics_frame.grid_rowconfigure(1, weight=1)
         
         # Stock summary - Replaced with Treeview
-        stock_frame = tk.LabelFrame(self, text="État des Stocks", font=("Arial", 12, "bold"), bg=BG_COLOR, fg=TEXT_COLOR)
+        stock_frame = tk.LabelFrame(self, text="État des Stocks", font=("Arial", 14, "bold"), bg=BG_COLOR, fg=TEXT_COLOR)
         stock_frame.pack(fill=tk.BOTH, expand=True, padx=40, pady=10) # Expand True for height
         
         # Treeview setup
@@ -682,7 +682,7 @@ class ClientsFrame(ttk.Frame):
         tk.Label(
             header, 
             text="Gestion des Clients", 
-            font=("Arial", 16, "bold"),
+            font=("Arial", 18, "bold"),
             bg=BG_COLOR,
             fg=TEXT_COLOR
         ).pack(side=tk.LEFT)
@@ -695,17 +695,17 @@ class ClientsFrame(ttk.Frame):
             text="+ Nouveau Client", 
             bg=PRIMARY_COLOR, 
             fg="white",
-            font=("Arial", 10, "bold"),
+            font=("Arial", 12, "bold"),
             command=self.add_client,
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
         
         tk.Button(
             btn_frame, 
-            text="Exporter Excel", 
+            text="Exporter PDF", 
             bg=ACCENT_COLOR, 
             fg="white",
-            font=("Arial", 10),
+            font=("Arial", 12),
             command=self.export_excel,
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
@@ -746,17 +746,17 @@ class ClientsFrame(ttk.Frame):
         action_frame.pack(fill=tk.X, padx=20)
         
         tk.Button(action_frame, text="Ajouter", bg=PRIMARY_COLOR, fg="white", 
-                 font=("Arial", 10, "bold"), command=self.add_client, width=15).pack(side=tk.LEFT, padx=5)
+                 font=("Arial", 12, "bold"), command=self.add_client, width=15).pack(side=tk.LEFT, padx=5)
         
         tk.Button(action_frame, text="Modifier", bg=SECONDARY_COLOR, fg="white", 
-                 font=("Arial", 10, "bold"), command=self.edit_client_btn, width=15).pack(side=tk.LEFT, padx=5)
+                 font=("Arial", 12, "bold"), command=self.edit_client_btn, width=15).pack(side=tk.LEFT, padx=5)
                  
         if self.app.user.get('role') == 'admin':
             tk.Button(action_frame, text="Supprimer", bg="#d32f2f", fg="white", 
-                     font=("Arial", 10, "bold"), command=self.delete_client_btn, width=15).pack(side=tk.LEFT, padx=5)
+                     font=("Arial", 12, "bold"), command=self.delete_client_btn, width=15).pack(side=tk.LEFT, padx=5)
 
         tk.Button(action_frame, text="Contrats", bg="#0097a7", fg="white", 
-                 font=("Arial", 10, "bold"), command=self.manage_contracts, width=15).pack(side=tk.LEFT, padx=5)
+                 font=("Arial", 12, "bold"), command=self.manage_contracts, width=15).pack(side=tk.LEFT, padx=5)
 
         # Context menu
         self.menu = tk.Menu(self.tree, tearoff=0)
@@ -888,7 +888,7 @@ class ProductsFrame(ttk.Frame):
         tk.Label(
             header, 
             text="Gestion des Produits", 
-            font=("Arial", 16, "bold"),
+            font=("Arial", 18, "bold"),
             bg=BG_COLOR,
             fg=TEXT_COLOR
         ).pack(side=tk.LEFT)
@@ -939,14 +939,14 @@ class ProductsFrame(ttk.Frame):
         action_frame.pack(fill=tk.X, padx=20)
         
         tk.Button(action_frame, text="Ajouter", bg=PRIMARY_COLOR, fg="white", 
-                 font=("Arial", 10, "bold"), command=self.add_product, width=15).pack(side=tk.LEFT, padx=5)
+                 font=("Arial", 12, "bold"), command=self.add_product, width=15).pack(side=tk.LEFT, padx=5)
         
         tk.Button(action_frame, text="Modifier", bg=SECONDARY_COLOR, fg="white", 
-                 font=("Arial", 10, "bold"), command=self.edit_product_btn, width=15).pack(side=tk.LEFT, padx=5)
+                 font=("Arial", 12, "bold"), command=self.edit_product_btn, width=15).pack(side=tk.LEFT, padx=5)
                  
         if self.app.user.get('role') == 'admin':
             tk.Button(action_frame, text="Supprimer", bg="#d32f2f", fg="white", 
-                     font=("Arial", 10, "bold"), command=self.delete_product_btn, width=15).pack(side=tk.LEFT, padx=5)
+                     font=("Arial", 12, "bold"), command=self.delete_product_btn, width=15).pack(side=tk.LEFT, padx=5)
         
         self.load_data()
         
@@ -1043,7 +1043,7 @@ class ReceptionsFrame(ttk.Frame):
         tk.Label(
             header, 
             text="Bons de Réception", 
-            font=("Arial", 16, "bold"),
+            font=("Arial", 18, "bold"),
             bg=BG_COLOR,
             fg=TEXT_COLOR
         ).pack(side=tk.LEFT)
@@ -1057,7 +1057,7 @@ class ReceptionsFrame(ttk.Frame):
             text="Modifier", 
             bg=SECONDARY_COLOR, 
             fg="white",
-            font=("Arial", 10, "bold"),
+            font=("Arial", 12, "bold"),
             command=self.modify_reception,
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
@@ -1068,7 +1068,7 @@ class ReceptionsFrame(ttk.Frame):
                 text="Supprimer", 
                 bg="#d32f2f", 
                 fg="white",
-                font=("Arial", 10, "bold"),
+                font=("Arial", 12, "bold"),
                 command=self.delete_reception,
                 cursor="hand2"
             ).pack(side=tk.LEFT, padx=5)
@@ -1078,7 +1078,7 @@ class ReceptionsFrame(ttk.Frame):
             text="+ Nouvelle Réception", 
             bg=PRIMARY_COLOR, 
             fg="white",
-            font=("Arial", 10, "bold"),
+            font=("Arial", 12, "bold"),
             command=self.add_reception,
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
@@ -1133,8 +1133,8 @@ class ReceptionsFrame(ttk.Frame):
         self.menu.add_command(label="Générer PDF", command=self.generate_pdf)
         self.tree.bind("<Button-3>", self.show_context_menu)
         # self.tree.tag_configure('evenrow', background='#546e7a')
-        self.tree.tag_configure('ecart_row', foreground='#d32f2f', font=('Arial', 10, 'bold')) # Red for anomalies
-        self.tree.tag_configure('annulee_row', foreground='#ff9100', font=('Arial', 10, 'bold', 'italic')) # Orange for cancelled
+        self.tree.tag_configure('ecart_row', foreground='#d32f2f', font=('Arial', 12, 'bold')) # Red for anomalies
+        self.tree.tag_configure('annulee_row', foreground='#ff9100', font=('Arial', 12, 'bold', 'italic')) # Orange for cancelled
         self.load_data()
 
     def create_filter_bar(self):
@@ -1145,7 +1145,7 @@ class ReceptionsFrame(ttk.Frame):
         def add_filter(parent, label, key, width=15):
             frame = tk.Frame(parent, bg=BG_COLOR)
             frame.pack(side=tk.LEFT, padx=5)
-            tk.Label(frame, text=label, bg=BG_COLOR, fg="white", font=("Arial", 9)).pack(anchor="w")
+            tk.Label(frame, text=label, bg=BG_COLOR, fg="white", font=("Arial", 11)).pack(anchor="w")
             widget = tk.Entry(frame, bg="#455a64", fg="white", insertbackground="white", width=width)
             widget.bind("<KeyRelease>", lambda e: self.apply_filters())
             widget.pack()
@@ -1158,7 +1158,7 @@ class ReceptionsFrame(ttk.Frame):
         add_filter(filter_frame, "Lieu", "lieu", width=12)
         
         # Clear button
-        tk.Button(filter_frame, text="Effacer", command=self.clear_filters, bg="#757575", fg="white", font=("Arial", 8)).pack(side=tk.LEFT, padx=15, pady=5)
+        tk.Button(filter_frame, text="Effacer", command=self.clear_filters, bg="#757575", fg="white", font=("Arial", 10)).pack(side=tk.LEFT, padx=15, pady=5)
 
     def clear_filters(self):
         for widget in self.filters.values():
@@ -1308,7 +1308,7 @@ class InvoicesFrame(ttk.Frame):
         tk.Label(
             header, 
             text="Factures et Avoirs", 
-            font=("Arial", 16, "bold"),
+            font=("Arial", 18, "bold"),
             bg=BG_COLOR,
             fg=TEXT_COLOR
         ).pack(side=tk.LEFT)
@@ -1321,7 +1321,7 @@ class InvoicesFrame(ttk.Frame):
             text="+ Nouvelle Facture", 
             bg=PRIMARY_COLOR, 
             fg="white",
-            font=("Arial", 10, "bold"),
+            font=("Arial", 12, "bold"),
             command=lambda: self.add_invoice('Facture'),
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
@@ -1331,7 +1331,7 @@ class InvoicesFrame(ttk.Frame):
             text="+ Avoir", 
             bg="#d32f2f", 
             fg="white",
-            font=("Arial", 10, "bold"),
+            font=("Arial", 12, "bold"),
             command=self.add_avoir,
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
@@ -1341,7 +1341,7 @@ class InvoicesFrame(ttk.Frame):
             text="Modifier", 
             bg="#f9a825", # Orange/Yellow to indicate edit
             fg="black",
-            font=("Arial", 10, "bold"),
+            font=("Arial", 12, "bold"),
             command=self.edit_selected,
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
@@ -1351,17 +1351,17 @@ class InvoicesFrame(ttk.Frame):
             text="Imprimer", 
             bg="#555", 
             fg="white", 
-            font=("Arial", 10),
+            font=("Arial", 12),
             command=self.print_selected,
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
         
         tk.Button(
             btn_frame, 
-            text="Exporter Excel", 
+            text="Exporter PDF", 
             bg=ACCENT_COLOR, 
             fg="white",
-            font=("Arial", 10),
+            font=("Arial", 12),
             command=self.export_excel,
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
@@ -1371,7 +1371,7 @@ class InvoicesFrame(ttk.Frame):
             text="Rapports", 
             bg="#f57c00", 
             fg="white",
-            font=("Arial", 10, "bold"),
+            font=("Arial", 12, "bold"),
             command=self.show_reports_menu,
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
@@ -1429,7 +1429,7 @@ class InvoicesFrame(ttk.Frame):
 
         # self.tree.tag_configure('evenrow', background='#546e7a')
         self.tree.tag_configure('avoir_row', foreground='#ff5252') # Dark Red/Orange for dark theme visibility
-        self.tree.tag_configure('annulee', foreground='#ff9800', font=('Arial', 9, 'bold')) # Orange Bold for Cancelled
+        self.tree.tag_configure('annulee', foreground='#ff9800', font=('Arial', 11, 'bold')) # Orange Bold for Cancelled
         self.load_data()
 
     def create_filter_bar(self):
@@ -1440,7 +1440,7 @@ class InvoicesFrame(ttk.Frame):
         def add_filter(parent, label, key, width=15, is_combo=False, values=None):
             frame = tk.Frame(parent, bg=BG_COLOR)
             frame.pack(side=tk.LEFT, padx=5)
-            tk.Label(frame, text=label, bg=BG_COLOR, fg="white", font=("Arial", 9)).pack(anchor="w")
+            tk.Label(frame, text=label, bg=BG_COLOR, fg="white", font=("Arial", 11)).pack(anchor="w")
             
             if is_combo:
                 widget = ttk.Combobox(frame, values=values, width=width)
@@ -1459,7 +1459,7 @@ class InvoicesFrame(ttk.Frame):
         add_filter(filter_frame, "Conditions de Vente", "condition", is_combo=True, values=["", "Au Comptant", "À Terme", "Sur Avances"], width=15)
         
         # Clear button
-        tk.Button(filter_frame, text="Effacer", command=self.clear_filters, bg="#757575", fg="white", font=("Arial", 8)).pack(side=tk.LEFT, padx=15, pady=5)
+        tk.Button(filter_frame, text="Effacer", command=self.clear_filters, bg="#757575", fg="white", font=("Arial", 10)).pack(side=tk.LEFT, padx=15, pady=5)
 
     def clear_filters(self):
         for key, widget in self.filters.items():
@@ -1779,7 +1779,7 @@ class PaymentsFrame(ttk.Frame):
         tk.Label(
             header, 
             text="Paiements", 
-            font=("Arial", 16, "bold"),
+            font=("Arial", 18, "bold"),
             bg=BG_COLOR,
             fg=TEXT_COLOR
         ).pack(side=tk.LEFT)
@@ -1792,7 +1792,7 @@ class PaymentsFrame(ttk.Frame):
             text="+ Nouveau Paiement", 
             bg=PRIMARY_COLOR, 
             fg="white",
-            font=("Arial", 10, "bold"),
+            font=("Arial", 12, "bold"),
             command=self.add_payment,
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
@@ -1802,7 +1802,7 @@ class PaymentsFrame(ttk.Frame):
             text="Modifier", 
             bg=SECONDARY_COLOR, 
             fg="white",
-            font=("Arial", 10, "bold"),
+            font=("Arial", 12, "bold"),
             command=self.modify_payment,
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
@@ -1813,7 +1813,7 @@ class PaymentsFrame(ttk.Frame):
                 text="Supprimer", 
                 bg="#d32f2f", 
                 fg="white",
-                font=("Arial", 10, "bold"),
+                font=("Arial", 12, "bold"),
                 command=self.delete_payment,
                 cursor="hand2"
             ).pack(side=tk.LEFT, padx=5)
@@ -1823,7 +1823,7 @@ class PaymentsFrame(ttk.Frame):
             text="Créer Bordereau", 
             bg="#c62828", 
             fg="white",
-            font=("Arial", 10, "bold"),
+            font=("Arial", 12, "bold"),
             command=self.create_bordereau,
             cursor="hand2"
         ).pack(side=tk.LEFT, padx=5)
@@ -1852,7 +1852,7 @@ class PaymentsFrame(ttk.Frame):
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         # self.tree.tag_configure('evenrow', background='#546e7a')
-        self.tree.tag_configure('pending', foreground='#ff9800', font=('Arial', 10, 'bold')) # Orange for Pending
+        self.tree.tag_configure('pending', foreground='#ff9800', font=('Arial', 12, 'bold')) # Orange for Pending
         self.load_data()
         
     def load_data(self):
@@ -1930,7 +1930,7 @@ class SituationFrame(ttk.Frame):
         header = tk.Frame(self, bg=BG_COLOR)
         header.pack(fill=tk.X, padx=20, pady=20)
         
-        tk.Label(header, text="Situation & Rapports", font=("Arial", 16, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
+        tk.Label(header, text="Situation & Rapports", font=("Arial", 18, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
         
         # Mode Selection
         mode_frame = tk.Frame(self, bg=BG_COLOR)
@@ -2774,8 +2774,8 @@ class StockFrame(ttk.Frame):
         header = tk.Frame(self, bg=BG_COLOR)
         header.pack(fill=tk.X, padx=20, pady=10)
         
-        tk.Label(header, text="État des Stocks", font=("Arial", 16, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
-        tk.Button(header, text="Exporter Excel", bg=ACCENT_COLOR, fg="white", command=self.export_excel).pack(side=tk.RIGHT)
+        tk.Label(header, text="État des Stocks", font=("Arial", 18, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
+        tk.Button(header, text="Exporter PDF", bg=ACCENT_COLOR, fg="white", command=self.export_excel).pack(side=tk.RIGHT)
         
         # Table
         table_frame = tk.Frame(self, bg=BG_COLOR)
@@ -2816,9 +2816,9 @@ class StockFrame(ttk.Frame):
         # self.tree.tag_configure('evenrow', background='#546e7a')
         
         # Conditional Formatting Tags
-        self.tree.tag_configure('row_pos', foreground='#00e676', font=('Arial', 10, 'bold')) # Green
-        self.tree.tag_configure('row_neg', foreground='#ff1744', font=('Arial', 10, 'bold')) # Red
-        self.tree.tag_configure('row_zero', foreground='#29b6f6', font=('Arial', 10, 'bold')) # Blue
+        self.tree.tag_configure('row_pos', foreground='#00e676', font=('Arial', 12, 'bold')) # Green
+        self.tree.tag_configure('row_neg', foreground='#ff1744', font=('Arial', 12, 'bold')) # Red
+        self.tree.tag_configure('row_zero', foreground='#29b6f6', font=('Arial', 12, 'bold')) # Blue
 
         self.load_data()
         
@@ -2919,7 +2919,7 @@ class UsersFrame(ttk.Frame):
         self._build()
     
     def _build(self):
-        tk.Label(self, text="Utilisateurs", font=("Arial", 16, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(pady=20)
+        tk.Label(self, text="Utilisateurs", font=("Arial", 18, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(pady=20)
         button_frame = tk.Frame(self, bg=BG_COLOR)
         button_frame.pack(fill=tk.X, padx=20, pady=10)
         
@@ -2982,7 +2982,7 @@ class PricesFrame(ttk.Frame):
         self._build()
     
     def _build(self):
-        tk.Label(self, text="Gestion des Prix", font=("Arial", 16, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(pady=20)
+        tk.Label(self, text="Gestion des Prix", font=("Arial", 18, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(pady=20)
         
         products = self.app.db.get_all_products()
         for p in products:
@@ -3095,10 +3095,10 @@ class ClientDialog:
             btn_width = 15
 
         tk.Button(btn_frame, text=btn_text, bg="#2e7d32", fg="white", 
-                 font=("Arial", 11, "bold"), command=self.save, width=btn_width).pack(side=tk.RIGHT, padx=10)
+                 font=("Arial", 13, "bold"), command=self.save, width=btn_width).pack(side=tk.RIGHT, padx=10)
         
         tk.Button(btn_frame, text="Annuler", bg="#757575", fg="white", 
-                 font=("Arial", 11, "bold"), command=self.dialog.destroy, width=15).pack(side=tk.RIGHT, padx=10)
+                 font=("Arial", 13, "bold"), command=self.dialog.destroy, width=15).pack(side=tk.RIGHT, padx=10)
     
     def _focus_next(self, widget):
         widget.tk_focusNext().focus()
@@ -3127,9 +3127,9 @@ class ClientDialog:
                 # Let's use #689f38 (Light Green 700) 
                 color = "#689f38" if solde >= 0 else "#ff1744"
                 
-                self.entries['solde'].config(state='normal', fg=color, disabledforeground=color, font=("Arial", 10, "bold"))
+                self.entries['solde'].config(state='normal', fg=color, disabledforeground=color, font=("Arial", 12, "bold"))
                 self.entries['solde'].delete(0, tk.END)
-                self.entries['solde'].config(state='normal', fg=color, disabledforeground=color, font=("Arial", 10, "bold"))
+                self.entries['solde'].config(state='normal', fg=color, disabledforeground=color, font=("Arial", 12, "bold"))
                 self.entries['solde'].delete(0, tk.END)
                 self.entries['solde'].insert(0, format_currency(solde))
                 self.entries['solde'].config(state='readonly')
@@ -3192,7 +3192,7 @@ class ContractDialog:
         header = tk.Frame(self.dialog, pady=10, padx=20)
         header.pack(fill=tk.X)
         tk.Label(header, text=f"Contrats Client: {self.client['raison_sociale']}", 
-                 font=("Arial", 14, "bold")).pack(side=tk.LEFT)
+                 font=("Arial", 16, "bold")).pack(side=tk.LEFT)
 
         # Form Frame
         form_frame = tk.LabelFrame(self.dialog, text="Nouveau / Modifier Contrat", padx=10, pady=10)
@@ -3501,10 +3501,10 @@ class ProductDialog:
             btn_width = 15
 
         tk.Button(btn_frame, text=btn_text, bg="#2e7d32", fg="white", 
-                 font=("Arial", 11, "bold"), command=self.save, width=btn_width).pack(side=tk.RIGHT, padx=10)
+                 font=("Arial", 13, "bold"), command=self.save, width=btn_width).pack(side=tk.RIGHT, padx=10)
         
         tk.Button(btn_frame, text="Annuler", bg="#757575", fg="white", 
-                 font=("Arial", 11, "bold"), command=self.dialog.destroy, width=15).pack(side=tk.RIGHT, padx=10)
+                 font=("Arial", 13, "bold"), command=self.dialog.destroy, width=15).pack(side=tk.RIGHT, padx=10)
     
     def _toggle_parent_requirement(self):
         if self.is_child_var.get():
@@ -3826,10 +3826,10 @@ class ReceptionDialog:
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X)
         
         tk.Button(btn_frame, text="Confirmer", bg="#2e7d32", fg="white", 
-                 font=("Arial", 11, "bold"), command=self.save, width=15).pack(side=tk.RIGHT, padx=10)
+                 font=("Arial", 13, "bold"), command=self.save, width=15).pack(side=tk.RIGHT, padx=10)
         
         tk.Button(btn_frame, text="Annuler", bg="#757575", fg="white", 
-                 font=("Arial", 11, "bold"), command=self.dialog.destroy, width=15).pack(side=tk.RIGHT, padx=10)
+                 font=("Arial", 13, "bold"), command=self.dialog.destroy, width=15).pack(side=tk.RIGHT, padx=10)
         
         self.selected_product_id = None
 
@@ -4118,24 +4118,30 @@ class InvoiceDialog:
             # Two-Step Validation
             if self.type_doc == 'Facture':
                  tk.Button(btn_frame, text="Confirmer avec impression", bg="#2e7d32", fg="white", 
-                          font=("Arial", 11, "bold"), command=self.save_validate).pack(side=tk.RIGHT, padx=5)
+                          font=("Arial", 13, "bold"), command=self.save_validate).pack(side=tk.RIGHT, padx=5)
                  
                  tk.Button(btn_frame, text="Confirmer sans impression", bg="#f9a825", fg="black", 
-                          font=("Arial", 11, "bold"), command=self.save_draft).pack(side=tk.RIGHT, padx=5)
+                          font=("Arial", 13, "bold"), command=self.save_draft).pack(side=tk.RIGHT, padx=5)
             else:
                  # Avoir - Standard Confirm
                  tk.Button(btn_frame, text="Confirmer Avoir", bg="#2e7d32", fg="white", 
-                          font=("Arial", 11, "bold"), command=self.save_validate).pack(side=tk.RIGHT, padx=20)
+                          font=("Arial", 13, "bold"), command=self.save_validate).pack(side=tk.RIGHT, padx=20)
         
         tk.Button(btn_frame, text="Imprimer", bg=ACCENT_COLOR, fg="white", 
-                 font=("Arial", 11, "bold"), command=self.print_preview).pack(side=tk.RIGHT, padx=20)
+                 font=("Arial", 13, "bold"), command=self.print_preview).pack(side=tk.RIGHT, padx=20)
         
         tk.Button(btn_frame, text="Imprimer BL (Matricielle)", bg="#795548", fg="white", 
-                 font=("Arial", 11, "bold"), command=self.print_matrix).pack(side=tk.RIGHT, padx=20)
+                 font=("Arial", 13, "bold"), command=self.print_matrix).pack(side=tk.RIGHT, padx=20)
+
+        tk.Button(btn_frame, text="Exp. Word", bg="#1a237e", fg="white", 
+                 font=("Arial", 13, "bold"), command=self.export_word).pack(side=tk.RIGHT, padx=5)
+        
+        tk.Button(btn_frame, text="Exp. Excel", bg="#2e7d32", fg="white", 
+                 font=("Arial", 13, "bold"), command=self.export_excel).pack(side=tk.RIGHT, padx=5)
 
         if self.readonly and self.type_doc == 'Facture':
              tk.Button(btn_frame, text="Ajouter Paiement", bg="#009688", fg="white",
-                      font=("Arial", 11, "bold"), command=self.open_payment_dialog).pack(side=tk.RIGHT, padx=20)
+                      font=("Arial", 13, "bold"), command=self.open_payment_dialog).pack(side=tk.RIGHT, padx=20)
              
              # BOUTON ANNULER (Rouge/Orange) - Seulement si la facture n'est pas déjà annulée
              # On vérifie l'état actuel (passé dans init ou à recharger)
@@ -4145,7 +4151,7 @@ class InvoiceDialog:
              current_status = cursor.fetchone()
              if current_status and current_status[0] != 'ANNULEE':
                  tk.Button(btn_frame, text="Annuler la Facture", bg="#d32f2f", fg="white",
-                          font=("Arial", 11, "bold"), command=self.confirm_cancellation).pack(side=tk.LEFT, padx=20)
+                          font=("Arial", 13, "bold"), command=self.confirm_cancellation).pack(side=tk.LEFT, padx=20)
         
         cancel_text = "Fermer" if self.readonly else "Annuler"
         tk.Button(btn_frame, text=cancel_text, command=self.dialog.destroy).pack(side=tk.RIGHT, padx=20)
@@ -4161,11 +4167,11 @@ class InvoiceDialog:
         left_footer.pack(side=tk.LEFT, fill=tk.Y)
 
         self.lbl_montant_lettres = tk.Label(left_footer, text="Arrêter la présente facture à la somme de : ...", 
-                                          bg="#fff9c4", fg="black", font=("Arial", 10, "italic"), wraplength=400, justify="left")
+                                          bg="#fff9c4", fg="black", font=("Arial", 12, "italic"), wraplength=400, justify="left")
         self.lbl_montant_lettres.pack(anchor="w", padx=10)
         
         # Transport Info (Requested by user)
-        self.lbl_footer_transport = tk.Label(left_footer, text="", bg="#fff9c4", fg="#455a64", font=("Arial", 9), justify="left")
+        self.lbl_footer_transport = tk.Label(left_footer, text="", bg="#fff9c4", fg="#455a64", font=("Arial", 11), justify="left")
         self.lbl_footer_transport.pack(anchor="w", padx=10, pady=(5,0))
         
         # Right side: Totals
@@ -4174,23 +4180,23 @@ class InvoiceDialog:
         
         # Using grid to ensure horizontal alignment (HT - TVA - TTC)
         
-        self.lbl_total_ht = tk.Label(totals_subframe, text="Montant HT: 0.00 DA", bg="#fff9c4", fg="black", font=("Arial", 10, "bold"))
+        self.lbl_total_ht = tk.Label(totals_subframe, text="Montant HT: 0.00 DA", bg="#fff9c4", fg="black", font=("Arial", 12, "bold"))
         self.lbl_total_ht.grid(row=0, column=0, sticky="e", padx=(0, 20))
         
-        self.lbl_total_tva = tk.Label(totals_subframe, text="Montant TVA: 0.00 DA", bg="#fff9c4", fg="black", font=("Arial", 10, "bold"))
+        self.lbl_total_tva = tk.Label(totals_subframe, text="Montant TVA: 0.00 DA", bg="#fff9c4", fg="black", font=("Arial", 12, "bold"))
         self.lbl_total_tva.grid(row=0, column=1, sticky="e", padx=(0, 20))
 
-        self.lbl_total_ttc = tk.Label(totals_subframe, text="Montant TTC: 0.00 DA", bg="#fff9c4", fg="#d50000", font=("Arial", 12, "bold"))
+        self.lbl_total_ttc = tk.Label(totals_subframe, text="Montant TTC: 0.00 DA", bg="#fff9c4", fg="#d50000", font=("Arial", 14, "bold"))
         self.lbl_total_ttc.grid(row=0, column=2, sticky="e")
         # Top Frame: Header Info (Green Box) - ONLY IN READONLY VIEW
         if self.readonly:
             header_frame = tk.Frame(self.dialog, bg="#dcedc8", padx=10, pady=5, relief="solid", borderwidth=1)
             header_frame.pack(side=tk.TOP, fill=tk.X, padx=20, pady=(10, 0))
             
-            self.lbl_header_num = tk.Label(header_frame, text="N° Facture: --", bg="#dcedc8", font=("Arial", 12, "bold"), fg="#2e7d32")
+            self.lbl_header_num = tk.Label(header_frame, text="N° Facture: --", bg="#dcedc8", font=("Arial", 14, "bold"), fg="#2e7d32")
             self.lbl_header_num.pack(side=tk.LEFT, padx=20)
             
-            self.lbl_header_date = tk.Label(header_frame, text="Date: --", bg="#dcedc8", font=("Arial", 12, "bold"), fg="#2e7d32")
+            self.lbl_header_date = tk.Label(header_frame, text="Date: --", bg="#dcedc8", font=("Arial", 14, "bold"), fg="#2e7d32")
             self.lbl_header_date.pack(side=tk.RIGHT, padx=20)
 
             # Check status for styling
@@ -4203,7 +4209,7 @@ class InvoiceDialog:
                     
                     if facture.get('motif_annulation'):
                          tk.Label(header_frame, text=f"Motif: {facture['motif_annulation']}", 
-                                  bg="#ffccbc", fg="#bf360c", font=("Arial", 10, "bold italic")).pack(side=tk.BOTTOM, pady=5)
+                                  bg="#ffccbc", fg="#bf360c", font=("Arial", 12, "bold italic")).pack(side=tk.BOTTOM, pady=5)
 
 
         # Client Selection Area
@@ -4262,19 +4268,19 @@ class InvoiceDialog:
              except:
                  invoice_num_text = "N° Facture: Nouveau"
 
-        self.lbl_invoice_num = tk.Label(header_right_frame, text=invoice_num_text, font=("Arial", 12, "bold"), fg="white", bg="black")
+        self.lbl_invoice_num = tk.Label(header_right_frame, text=invoice_num_text, font=("Arial", 14, "bold"), fg="white", bg="black")
         self.lbl_invoice_num.pack(anchor="e")
         
         # 2. System Date
         now_str = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
-        self.lbl_sys_date = tk.Label(header_right_frame, text=f"Système: {now_str}", font=("Arial", 10), fg="#cfd8dc", bg="black")
+        self.lbl_sys_date = tk.Label(header_right_frame, text=f"Système: {now_str}", font=("Arial", 12), fg="#cfd8dc", bg="black")
         self.lbl_sys_date.pack(anchor="e")
         
         # 3. Modifiable Date Field
         date_frame = tk.Frame(header_right_frame, bg="black")
         date_frame.pack(anchor="e", pady=(5, 0))
         
-        tk.Label(date_frame, text="Date Facture:", font=("Arial", 10), fg="white", bg="black").pack(side=tk.LEFT, padx=5)
+        tk.Label(date_frame, text="Date Facture:", font=("Arial", 12), fg="white", bg="black").pack(side=tk.LEFT, padx=5)
         
         if DateEntry:
             self.date_facture_entry = DateEntry(date_frame, width=12, background='darkblue',
@@ -4443,7 +4449,7 @@ class InvoiceDialog:
 
             # Designation (Label)
             tk.Label(entry_frame, text="Désignation").grid(row=0, column=1, padx=5)
-            self.lbl_designation = tk.Label(entry_frame, text="-", fg="blue", font=("Arial", 10, "bold"))
+            self.lbl_designation = tk.Label(entry_frame, text="-", fg="blue", font=("Arial", 12, "bold"))
             self.lbl_designation.grid(row=1, column=1, padx=5)
 
             # Quantity
@@ -4469,7 +4475,7 @@ class InvoiceDialog:
             self.taux_entry = tk.Entry(entry_frame, width=5, bg="#455a64", fg="white", insertbackground="white")
             
             # Stock Info Label
-            self.lbl_stock_info = tk.Label(entry_frame, text="Sélectionnez un produit", font=("Arial", 9, "bold"), fg="blue")
+            self.lbl_stock_info = tk.Label(entry_frame, text="Sélectionnez un produit", font=("Arial", 11, "bold"), fg="blue")
             self.lbl_stock_info.grid(row=2, column=0, columnspan=7, sticky="w", padx=5, pady=(5,0))
 
             # Initial state
@@ -4575,7 +4581,7 @@ class InvoiceDialog:
         dialog.transient(self.dialog)
         dialog.grab_set()
         
-        tk.Label(dialog, text="ATTENTION : Action Irréversible", fg="red", font=("Arial", 12, "bold")).pack(pady=10)
+        tk.Label(dialog, text="ATTENTION : Action Irréversible", fg="red", font=("Arial", 14, "bold")).pack(pady=10)
         tk.Label(dialog, text="Veuillez saisir le motif de l'annulation :").pack(pady=5)
         
         motif_entry = tk.Entry(dialog, width=50)
@@ -4602,7 +4608,7 @@ class InvoiceDialog:
             except Exception as e:
                 messagebox.showerror("Erreur", f"Erreur technique: {str(e)}", parent=dialog)
 
-        tk.Button(dialog, text="Confirmer l'Annulation", bg="#d32f2f", fg="white", font=("Arial", 10, "bold"), command=do_cancel).pack(pady=20) 
+        tk.Button(dialog, text="Confirmer l'Annulation", bg="#d32f2f", fg="white", font=("Arial", 12, "bold"), command=do_cancel).pack(pady=20) 
         tk.Button(dialog, text="Abandonner", command=dialog.destroy).pack()
 
 
@@ -5494,6 +5500,36 @@ class InvoiceDialog:
         else:
              messagebox.showinfo("Info", "Veuillez d'abord sauvegarder la facture.")
 
+    def export_word(self):
+        if hasattr(self, 'saved_facture_id') or (self.readonly and self.view_facture_id):
+            fid = self.saved_facture_id if hasattr(self, 'saved_facture_id') else self.view_facture_id
+            try:
+                fac = self.app.db.get_facture_by_id(fid)
+                from word_exports import generate_invoice_word
+                filename = generate_invoice_word(fac)
+                if filename:
+                    if messagebox.askyesno("Succès", "Fichier Word généré.\nOuvrir le fichier ?"):
+                        os.startfile(filename)
+            except Exception as e:
+                messagebox.showerror("Erreur", f"Erreur export Word : {e}")
+        else:
+             messagebox.showinfo("Info", "Veuillez d'abord sauvegarder la facture.")
+
+    def export_excel(self):
+        if hasattr(self, 'saved_facture_id') or (self.readonly and self.view_facture_id):
+            fid = self.saved_facture_id if hasattr(self, 'saved_facture_id') else self.view_facture_id
+            try:
+                fac = self.app.db.get_facture_by_id(fid)
+                from reports import generate_invoice_pdf_matricielle
+                filename = generate_invoice_pdf_matricielle(fac)
+                if filename:
+                    if messagebox.askyesno("Succès", "Fichier PDF généré (format matricielle).\nOuvrir le fichier ?"):
+                        os.startfile(filename)
+            except Exception as e:
+                messagebox.showerror("Erreur", f"Erreur export PDF : {e}")
+        else:
+             messagebox.showinfo("Info", "Veuillez d'abord sauvegarder la facture.")
+
 
 class LigneDialog:
     def __init__(self, parent, app, callback=None):
@@ -5890,17 +5926,17 @@ class UserDialog:
         frame = tk.Frame(self.dialog, padx=40, pady=20)
         frame.pack(fill=tk.BOTH, expand=True)
 
-        tk.Label(frame, text="Nom d'utilisateur*", font=("Arial", 10, "bold")).pack(anchor="w", pady=(10, 5))
-        self.username = tk.Entry(frame, font=("Arial", 11), bg="#455a64", fg="white", insertbackground="white")
+        tk.Label(frame, text="Nom d'utilisateur*", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 5))
+        self.username = tk.Entry(frame, font=("Arial", 13), bg="#455a64", fg="white", insertbackground="white")
         self.username.pack(fill=tk.X, pady=5)
         self.username.focus()
         
-        tk.Label(frame, text="Mot de Passe*", font=("Arial", 10, "bold")).pack(anchor="w", pady=(10, 5))
-        self.password = tk.Entry(frame, show="*", font=("Arial", 11), bg="#455a64", fg="white", insertbackground="white")
+        tk.Label(frame, text="Mot de Passe*", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 5))
+        self.password = tk.Entry(frame, show="*", font=("Arial", 13), bg="#455a64", fg="white", insertbackground="white")
         self.password.pack(fill=tk.X, pady=5)
         
         tk.Button(frame, text="Enregistrer", bg=PRIMARY_COLOR, fg="white", 
-                 font=("Arial", 11, "bold"), command=self.save, height=2).pack(fill=tk.X, pady=30)
+                 font=("Arial", 13, "bold"), command=self.save, height=2).pack(fill=tk.X, pady=30)
     
     def save(self):
         try:
@@ -5986,7 +6022,7 @@ class ClosureDialog:
         self._build()
     
     def _build(self):
-        tk.Label(self.dialog, text="Clôture Annuelle", font=("Arial", 14, "bold")).pack(pady=20)
+        tk.Label(self.dialog, text="Clôture Annuelle", font=("Arial", 16, "bold")).pack(pady=20)
         
         tk.Label(self.dialog, text="Année à clôturer:").pack(pady=5)
         self.annee = tk.Entry(self.dialog, bg="#455a64", fg="white", insertbackground="white")
@@ -6048,10 +6084,10 @@ class ClientStateDialog:
         header = tk.Frame(self.dialog, bg=BG_COLOR)
         header.pack(fill=tk.X, padx=20, pady=10)
         
-        tk.Label(header, text="État Détaillé des Clients Actifs", font=("Arial", 16, "bold"), bg=BG_COLOR).pack(side=tk.LEFT)
+        tk.Label(header, text="État Détaillé des Clients Actifs", font=("Arial", 18, "bold"), bg=BG_COLOR).pack(side=tk.LEFT)
         
         tk.Button(
-            header, text="Imprimer / PDF", bg=PRIMARY_COLOR, fg="white", font=("Arial", 10, "bold"),
+            header, text="Imprimer / PDF", bg=PRIMARY_COLOR, fg="white", font=("Arial", 12, "bold"),
             command=self.print_pdf
         ).pack(side=tk.RIGHT)
         
@@ -6119,19 +6155,19 @@ class DateRangeDialog:
         self._build()
         
     def _build(self):
-        tk.Label(self.dialog, text="Période du :", font=("Arial", 10)).pack(pady=(20, 5))
+        tk.Label(self.dialog, text="Période du :", font=("Arial", 12)).pack(pady=(20, 5))
         
         self.start_entry = tk.Entry(self.dialog)
         self.start_entry.insert(0, datetime.now().strftime("%Y-%m-01")) # First day of current month
         self.start_entry.pack(pady=5)
         
-        tk.Label(self.dialog, text="Au :", font=("Arial", 10)).pack(pady=5)
+        tk.Label(self.dialog, text="Au :", font=("Arial", 12)).pack(pady=5)
         
         self.end_entry = tk.Entry(self.dialog)
         self.end_entry.insert(0, datetime.now().strftime("%Y-%m-%d")) # Today
         self.end_entry.pack(pady=5)
         
-        tk.Label(self.dialog, text="(Format: YYYY-MM-DD)", font=("Arial", 8), fg="gray").pack()
+        tk.Label(self.dialog, text="(Format: YYYY-MM-DD)", font=("Arial", 10), fg="gray").pack()
         
         tk.Button(self.dialog, text="Valider", bg=PRIMARY_COLOR, fg="white", command=self.validate).pack(pady=20)
         
@@ -6160,13 +6196,13 @@ class InvoiceStateDialog:
         tk.Label(
             header, 
             text=f"État des Factures ({self.date_range['start']} au {self.date_range['end']})", 
-            font=("Arial", 14, "bold"), 
+            font=("Arial", 16, "bold"), 
             bg=BG_COLOR,
             fg=TEXT_COLOR
         ).pack(side=tk.LEFT)
         
         tk.Button(
-            header, text="Imprimer PDF", bg=PRIMARY_COLOR, fg="white", font=("Arial", 10, "bold"),
+            header, text="Imprimer PDF", bg=PRIMARY_COLOR, fg="white", font=("Arial", 12, "bold"),
             command=self.print_pdf
         ).pack(side=tk.RIGHT)
         
@@ -6211,8 +6247,8 @@ class InvoiceStateDialog:
         footer = tk.Frame(self.dialog, bg=BG_COLOR, height=40)
         footer.pack(fill=tk.X, padx=20, pady=10)
         
-        tk.Label(footer, text="TOTAL GÉNÉRAL HT:", font=("Arial", 12, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
-        tk.Label(footer, text=f"{total_ht:,.2f} DA", font=("Arial", 12, "bold"), fg=ACCENT_COLOR, bg=BG_COLOR).pack(side=tk.RIGHT)
+        tk.Label(footer, text="TOTAL GÉNÉRAL HT:", font=("Arial", 14, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
+        tk.Label(footer, text=f"{total_ht:,.2f} DA", font=("Arial", 14, "bold"), fg=ACCENT_COLOR, bg=BG_COLOR).pack(side=tk.RIGHT)
 
     def print_pdf(self):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -6244,13 +6280,13 @@ class Etat104Dialog:
         tk.Label(
             header, 
             text=f"ÉTAT N° 104 ({self.date_range['start']} au {self.date_range['end']})", 
-            font=("Arial", 14, "bold"), 
+            font=("Arial", 16, "bold"), 
             bg=BG_COLOR,
             fg=TEXT_COLOR
         ).pack(side=tk.LEFT)
         
         tk.Button(
-            header, text="Imprimer PDF", bg=PRIMARY_COLOR, fg="white", font=("Arial", 10, "bold"),
+            header, text="Imprimer PDF", bg=PRIMARY_COLOR, fg="white", font=("Arial", 12, "bold"),
             command=self.print_pdf
         ).pack(side=tk.RIGHT)
         
@@ -6302,8 +6338,8 @@ class Etat104Dialog:
         footer = tk.Frame(self.dialog, bg=BG_COLOR, height=40)
         footer.pack(fill=tk.X, padx=20, pady=10)
         
-        tk.Label(footer, text="TOTAL CA HT:", font=("Arial", 12, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
-        tk.Label(footer, text=f"{total_ca:,.2f} DA", font=("Arial", 12, "bold"), fg=ACCENT_COLOR, bg=BG_COLOR).pack(side=tk.RIGHT)
+        tk.Label(footer, text="TOTAL CA HT:", font=("Arial", 14, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
+        tk.Label(footer, text=f"{total_ca:,.2f} DA", font=("Arial", 14, "bold"), fg=ACCENT_COLOR, bg=BG_COLOR).pack(side=tk.RIGHT)
 
     def print_pdf(self):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -6335,13 +6371,13 @@ class PaymentsStateDialog:
         tk.Label(
             header, 
             text=f"ÉTAT DES PAIEMENTS ({self.date_range['start']} au {self.date_range['end']})", 
-            font=("Arial", 14, "bold"), 
+            font=("Arial", 16, "bold"), 
             bg=BG_COLOR,
             fg=TEXT_COLOR
         ).pack(side=tk.LEFT)
         
         tk.Button(
-            header, text="Imprimer PDF", bg=PRIMARY_COLOR, fg="white", font=("Arial", 10, "bold"),
+            header, text="Imprimer PDF", bg=PRIMARY_COLOR, fg="white", font=("Arial", 12, "bold"),
             command=self.print_pdf
         ).pack(side=tk.RIGHT)
         
@@ -6390,8 +6426,8 @@ class PaymentsStateDialog:
         footer = tk.Frame(self.dialog, bg=BG_COLOR, height=40)
         footer.pack(fill=tk.X, padx=20, pady=10)
         
-        tk.Label(footer, text="TOTAL PAIEMENTS:", font=("Arial", 12, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
-        tk.Label(footer, text=f"{total_paiements:,.2f} DA", font=("Arial", 12, "bold"), fg=ACCENT_COLOR, bg=BG_COLOR).pack(side=tk.RIGHT)
+        tk.Label(footer, text="TOTAL PAIEMENTS:", font=("Arial", 14, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
+        tk.Label(footer, text=f"{total_paiements:,.2f} DA", font=("Arial", 14, "bold"), fg=ACCENT_COLOR, bg=BG_COLOR).pack(side=tk.RIGHT)
 
     def print_pdf(self):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -6442,7 +6478,7 @@ class UserDialog:
         tk.Label(
             container, 
             text=title_text, 
-            font=("Arial", 16, "bold"),
+            font=("Arial", 18, "bold"),
             bg=BG_COLOR,
             fg=TEXT_COLOR
         ).pack(pady=(0, 20))
@@ -6450,13 +6486,13 @@ class UserDialog:
         # Username
         tk.Label(container, text="Nom d'utilisateur*", bg=BG_COLOR, fg=TEXT_COLOR, anchor="w").pack(fill=tk.X)
         self.username_var = tk.StringVar()
-        self.username_entry = tk.Entry(container, textvariable=self.username_var, font=("Arial", 11), bg="#455a64", fg="white", insertbackground="white")
+        self.username_entry = tk.Entry(container, textvariable=self.username_var, font=("Arial", 13), bg="#455a64", fg="white", insertbackground="white")
         self.username_entry.pack(fill=tk.X, pady=(5, 15))
         
         # Full Name
         tk.Label(container, text="Nom & Prénom*", bg=BG_COLOR, fg=TEXT_COLOR, anchor="w").pack(fill=tk.X)
         self.fullname_var = tk.StringVar()
-        self.fullname_entry = tk.Entry(container, textvariable=self.fullname_var, font=("Arial", 11), bg="#455a64", fg="white", insertbackground="white")
+        self.fullname_entry = tk.Entry(container, textvariable=self.fullname_var, font=("Arial", 13), bg="#455a64", fg="white", insertbackground="white")
         self.fullname_entry.pack(fill=tk.X, pady=(5, 15))
         
         # Role
@@ -6468,14 +6504,14 @@ class UserDialog:
         # Password
         tk.Label(container, text="Mot de passe*", bg=BG_COLOR, fg=TEXT_COLOR, anchor="w").pack(fill=tk.X)
         self.password_var = tk.StringVar()
-        self.password_entry = tk.Entry(container, textvariable=self.password_var, show="*", font=("Arial", 11), bg="#455a64", fg="white", insertbackground="white")
+        self.password_entry = tk.Entry(container, textvariable=self.password_var, show="*", font=("Arial", 13), bg="#455a64", fg="white", insertbackground="white")
         self.password_entry.pack(fill=tk.X, pady=(5, 15))
         
         # Confirm Password (Hidden initially)
         self.confirm_frame = tk.Frame(container, bg=BG_COLOR)
         tk.Label(self.confirm_frame, text="Resaisir Mot de passe*", bg=BG_COLOR, fg=TEXT_COLOR, anchor="w").pack(fill=tk.X)
         self.confirm_var = tk.StringVar()
-        self.confirm_entry = tk.Entry(self.confirm_frame, textvariable=self.confirm_var, show="*", font=("Arial", 11), bg="#455a64", fg="white", insertbackground="white")
+        self.confirm_entry = tk.Entry(self.confirm_frame, textvariable=self.confirm_var, show="*", font=("Arial", 13), bg="#455a64", fg="white", insertbackground="white")
         self.confirm_entry.pack(fill=tk.X, pady=5)
         
         # Bindings for dynamic confirmation field
@@ -6608,7 +6644,7 @@ class AboutDialog:
         container.pack(fill=tk.BOTH, expand=True)
 
         # Flag (Text based for simplicity and reliability)
-        lbl_flag = tk.Label(container, text="🇩🇿", font=("Arial", 64), bg="white")
+        lbl_flag = tk.Label(container, text="🇩🇿", font=("Arial", 66), bg="white")
         lbl_flag.pack(pady=(0, 20))
         
         # Text
@@ -6617,7 +6653,7 @@ class AboutDialog:
             text=("Développé par : Mr Oulmi Abdeldjallil\n"
                   "N° Tel: 0554 15 57 37. E-mail: djalleloulmi1@gmail.com\n"
                   "pour l'ECDE OUED SMAR"),
-            font=("Arial", 14, "bold"),
+            font=("Arial", 16, "bold"),
             fg="#2e7d32", # Green
             bg="white",
             justify="center",
@@ -6625,7 +6661,7 @@ class AboutDialog:
         )
         lbl_text.pack(pady=20)
         
-        tk.Button(container, text="Fermer", command=self.dialog.destroy, bg="#757575", fg="white", font=("Arial", 10)).pack(pady=(20,0))
+        tk.Button(container, text="Fermer", command=self.dialog.destroy, bg="#757575", fg="white", font=("Arial", 12)).pack(pady=(20,0))
 
 
 class JournalDialog:
@@ -6642,7 +6678,7 @@ class JournalDialog:
         # Header
         header = tk.Frame(self.dialog, bg=BG_COLOR, padx=20, pady=10)
         header.pack(fill=tk.X)
-        tk.Label(header, text="Journal des Actions (Audit Log)", font=("Arial", 16, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
+        tk.Label(header, text="Journal des Actions (Audit Log)", font=("Arial", 18, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT)
         
         # Filters
         filter_frame = tk.LabelFrame(self.dialog, text="Filtres", padx=10, pady=10)
@@ -6681,8 +6717,8 @@ class JournalDialog:
         tk.Radiobutton(filter_frame, text="Suppressions", variable=self.action_var, value="DELETE", command=self.load_data).pack(side=tk.LEFT, padx=5)
         
         # Buttons
-        tk.Button(filter_frame, text="Actualiser", command=self.load_data, bg=SECONDARY_COLOR, fg="white", font=("Arial", 10)).pack(side=tk.LEFT, padx=20)
-        tk.Button(filter_frame, text="Exporter Excel", command=self.export_excel, bg="#2e7d32", fg="white", font=("Arial", 10, "bold")).pack(side=tk.RIGHT, padx=10)
+        tk.Button(filter_frame, text="Actualiser", command=self.load_data, bg=SECONDARY_COLOR, fg="white", font=("Arial", 12)).pack(side=tk.LEFT, padx=20)
+        tk.Button(filter_frame, text="Exporter PDF", command=self.export_excel, bg="#2e7d32", fg="white", font=("Arial", 12, "bold")).pack(side=tk.RIGHT, padx=10)
 
         # Treeview
         tree_frame = tk.Frame(self.dialog)
@@ -6816,7 +6852,7 @@ class RecoveryFollowUpDialog:
         tk.Label(
             header, 
             text=f"ÉTAT DE COUVERTURE DES CRÉANCES (MOIS {self.month:02d}/{self.year})", 
-            font=("Arial", 14, "bold"), 
+            font=("Arial", 16, "bold"), 
             bg=BG_COLOR,
             fg=TEXT_COLOR
         ).pack(side=tk.LEFT)
@@ -6827,18 +6863,18 @@ class RecoveryFollowUpDialog:
             tk.Label(
                 header,
                 text=f"Taux de Recouvrement Global : {rate:.2f}%",
-                font=("Arial", 12, "bold"),
+                font=("Arial", 14, "bold"),
                 bg=BG_COLOR,
                 fg="lime" if rate >= 80 else "orange"
             ).pack(side=tk.LEFT, padx=30)
         
         tk.Button(
-            header, text="Vers Word", bg="#2b5797", fg="white", font=("Arial", 10, "bold"),
+            header, text="Vers Word", bg="#2b5797", fg="white", font=("Arial", 12, "bold"),
             command=self.export_word
         ).pack(side=tk.RIGHT, padx=5)
         
         tk.Button(
-            header, text="Imprimer PDF", bg=PRIMARY_COLOR, fg="white", font=("Arial", 10, "bold"),
+            header, text="Imprimer PDF", bg=PRIMARY_COLOR, fg="white", font=("Arial", 12, "bold"),
             command=self.print_pdf
         ).pack(side=tk.RIGHT, padx=5)
         
@@ -6878,7 +6914,7 @@ class RecoveryFollowUpDialog:
         # Tags for coloring
         self.tree.tag_configure("regle", foreground="green")
         self.tree.tag_configure("attente", foreground="orange")
-        self.tree.tag_configure("alerte", foreground="red", font=("Arial", 10, "bold"))
+        self.tree.tag_configure("alerte", foreground="red", font=("Arial", 12, "bold"))
         
         # Load Data
         if 'data' in self.data:
@@ -6902,8 +6938,8 @@ class RecoveryFollowUpDialog:
         
         if self.data.get('totals'):
             t = self.data['totals']
-            tk.Label(footer, text=f"Total Cible: {t['target']:,.2f} DA", font=("Arial", 11, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=20)
-            tk.Label(footer, text=f"Total Réalisé: {t['realized']:,.2f} DA", font=("Arial", 11, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=20)
+            tk.Label(footer, text=f"Total Cible: {t['target']:,.2f} DA", font=("Arial", 13, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=20)
+            tk.Label(footer, text=f"Total Réalisé: {t['realized']:,.2f} DA", font=("Arial", 13, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(side=tk.LEFT, padx=20)
 
     def print_pdf(self):
         from reports import generate_recovery_pdf
@@ -6947,20 +6983,20 @@ class MasterDashboardFrame(tk.Frame):
         header_frame.pack(fill=tk.X, padx=20, pady=(20, 10))
         
         title_lbl = tk.Label(header_frame, text="TABLEAU DE BORD MAÎTRE (COCKPIT)", 
-                             font=("Arial", 20, "bold"), bg=BG_COLOR, fg="white")
+                             font=("Arial", 22, "bold"), bg=BG_COLOR, fg="white")
         title_lbl.pack(side=tk.LEFT)
         
         btn_frame = tk.Frame(header_frame, bg=BG_COLOR)
         btn_frame.pack(side=tk.RIGHT)
         
         tk.Button(btn_frame, text="Actualiser", bg=SECONDARY_COLOR, fg="white", 
-                 font=("Arial", 10), command=self.load_data).pack(side=tk.LEFT, padx=5)
+                 font=("Arial", 12), command=self.load_data).pack(side=tk.LEFT, padx=5)
                  
         tk.Button(btn_frame, text="Export PDF", bg="#d32f2f", fg="white", 
-                 font=("Arial", 10), command=self.export_pdf).pack(side=tk.LEFT, padx=5)
+                 font=("Arial", 12), command=self.export_pdf).pack(side=tk.LEFT, padx=5)
                  
         tk.Button(btn_frame, text="Export Word", bg="#2b5797", fg="white", 
-                 font=("Arial", 10), command=self.export_word).pack(side=tk.LEFT, padx=5)
+                 font=("Arial", 12), command=self.export_word).pack(side=tk.LEFT, padx=5)
 
         # Main Scrollable Area (if needed, but Cockpit should fit in one view)
         # Using a canvas just in case, or direct packing if layout is tight.
@@ -6973,6 +7009,14 @@ class MasterDashboardFrame(tk.Frame):
         
         # We will create 4 tiles dynamically in load_data or predefined here
         self.tile_sales = self._create_tile(self.kpi_frame, "Performance Ventes (HT)", "#1e88e5")
+        # Binder le clic sur le frame ET tous ses widgets enfants (labels)
+        self.tile_sales['frame'].bind("<Button-1>", self._on_sales_tile_click)
+        self.tile_sales['val'].bind("<Button-1>", self._on_sales_tile_click)
+        self.tile_sales['sub'].bind("<Button-1>", self._on_sales_tile_click)
+        # Binder aussi sur le label titre
+        for widget in self.tile_sales['frame'].winfo_children():
+            widget.bind("<Button-1>", self._on_sales_tile_click)
+        
         self.tile_health = self._create_tile(self.kpi_frame, "Santé Financière", "#43a047")
         self.tile_debt = self._create_tile(self.kpi_frame, "Risque Créance (+30j - HT)", "#fb8c00")
         self.tile_ops = self._create_tile(self.kpi_frame, "Alerte Opérationnelle", "#e53935")
@@ -6988,21 +7032,21 @@ class MasterDashboardFrame(tk.Frame):
         # Chart A: Thermometer
         self.chart_a_frame = tk.Frame(charts_frame, bg=SIDEBAR_COLOR, bd=1, relief=tk.RIDGE)
         self.chart_a_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, exclude_pad))
-        tk.Label(self.chart_a_frame, text="Objectif vs Réalisé", bg=SIDEBAR_COLOR, fg="white", font=("Arial", 11, "bold")).pack(pady=5)
+        tk.Label(self.chart_a_frame, text="Objectif vs Réalisé", bg=SIDEBAR_COLOR, fg="white", font=("Arial", 13, "bold")).pack(pady=5)
         self.lbl_chart_a = tk.Label(self.chart_a_frame, bg=SIDEBAR_COLOR)
         self.lbl_chart_a.pack(expand=True)
 
         # Chart B: Top 5 Clients
         self.chart_b_frame = tk.Frame(charts_frame, bg=SIDEBAR_COLOR, bd=1, relief=tk.RIDGE)
         self.chart_b_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, exclude_pad))
-        tk.Label(self.chart_b_frame, text="Top 5 Clients (Global)", bg=SIDEBAR_COLOR, fg="white", font=("Arial", 11, "bold")).pack(pady=5)
+        tk.Label(self.chart_b_frame, text="Top 5 Clients (Global)", bg=SIDEBAR_COLOR, fg="white", font=("Arial", 13, "bold")).pack(pady=5)
         self.lbl_chart_b = tk.Label(self.chart_b_frame, bg=SIDEBAR_COLOR)
         self.lbl_chart_b.pack(expand=True)
         
         # Chart C: Weekly Evolution
         self.chart_c_frame = tk.Frame(charts_frame, bg=SIDEBAR_COLOR, bd=1, relief=tk.RIDGE)
         self.chart_c_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        tk.Label(self.chart_c_frame, text="Ventes - 7 derniers jours", bg=SIDEBAR_COLOR, fg="white", font=("Arial", 11, "bold")).pack(pady=5)
+        tk.Label(self.chart_c_frame, text="Ventes - 7 derniers jours", bg=SIDEBAR_COLOR, fg="white", font=("Arial", 13, "bold")).pack(pady=5)
         self.lbl_chart_c = tk.Label(self.chart_c_frame, bg=SIDEBAR_COLOR)
         self.lbl_chart_c.pack(expand=True)
 
@@ -7011,7 +7055,7 @@ class MasterDashboardFrame(tk.Frame):
         alerts_container = tk.Frame(self, bg=BG_COLOR)
         alerts_container.pack(fill=tk.X, padx=20, pady=10)
         
-        tk.Label(alerts_container, text="ALERTES DE SÉCURITÉ (Code Rouge)", bg=BG_COLOR, fg="#ff5252", font=("Arial", 12, "bold")).pack(anchor="w", pady=(0, 5))
+        tk.Label(alerts_container, text="ALERTES DE SÉCURITÉ (Code Rouge)", bg=BG_COLOR, fg="#ff5252", font=("Arial", 14, "bold")).pack(anchor="w", pady=(0, 5))
         
         self.alerts_tree = ttk.Treeview(alerts_container, columns=("Client", "Montant", "Raison"), show="headings", height=4)
         self.alerts_tree.heading("Client", text="Client")
@@ -7032,12 +7076,12 @@ class MasterDashboardFrame(tk.Frame):
         frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
         frame.pack_propagate(False)
         
-        tk.Label(frame, text=title, bg=color, fg="white", font=("Arial", 10, "bold")).pack(anchor="nw", padx=10, pady=5)
+        tk.Label(frame, text=title, bg=color, fg="white", font=("Arial", 12, "bold")).pack(anchor="nw", padx=10, pady=5)
         
-        val_lbl = tk.Label(frame, text="--", bg=color, fg="white", font=("Arial", 22, "bold"))
+        val_lbl = tk.Label(frame, text="--", bg=color, fg="white", font=("Arial", 24, "bold"))
         val_lbl.pack(expand=True)
         
-        sub_lbl = tk.Label(frame, text="", bg=color, fg="white", font=("Arial", 9))
+        sub_lbl = tk.Label(frame, text="", bg=color, fg="white", font=("Arial", 11))
         sub_lbl.pack(anchor="se", padx=10, pady=5)
         
         return {'frame': frame, 'val': val_lbl, 'sub': sub_lbl}
@@ -7128,6 +7172,24 @@ class MasterDashboardFrame(tk.Frame):
         except Exception as e:
             messagebox.showerror("Erreur", f"Erreur de chargement du Cockpit: {e}")
             traceback.print_exc()
+    
+    def _on_sales_tile_click(self, event):
+        """Afficher menu contextuel pour État 104"""
+        menu = tk.Menu(self, tearoff=0, bg="white", fg="black", font=("Arial", 12))
+        menu.add_command(label="📊 Afficher à l'écran", command=lambda: self._show_etat_104_dialog("screen"))
+        menu.add_separator()
+        menu.add_command(label="📄 Exporter PDF", command=lambda: self._show_etat_104_dialog("pdf"))
+        menu.add_command(label="📝 Exporter Word", command=lambda: self._show_etat_104_dialog("word"))
+        
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+    
+    def _show_etat_104_dialog(self, export_type):
+        """Afficher dialog de sélection de période pour État 104"""
+        Etat104PeriodDialog(self, export_type, self.app)
+
 
     def export_pdf(self):
         if not hasattr(self, 'current_data') or not self.current_data:
@@ -7157,4 +7219,363 @@ class MasterDashboardFrame(tk.Frame):
             messagebox.showerror("Erreur", f"Erreur lors de la génération Word : {e}")
             traceback.print_exc()
 
+
+# ==================== ÉTAT 104 DIALOGS ====================
+
+class Etat104PeriodDialog:
+    """Dialog pour sélectionner la période de l'État 104"""
+    
+    def __init__(self, parent, export_type, app):
+        self.export_type = export_type
+        self.app = app
+        
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("État 104 - Sélection de Période")
+        self.dialog.geometry("500x400")  # Augmenté de 300 à 400 pour voir les boutons
+        self.dialog.configure(bg=BG_COLOR)
+        self.dialog.resizable(False, False)
+        
+        # Center dialog
+        self.dialog.update_idletasks()
+        width = self.dialog.winfo_width()
+        height = self.dialog.winfo_height()
+        x = (self.dialog.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.dialog.winfo_screenheight() // 2) - (height // 2)
+        self.dialog.geometry(f"{width}x{height}+{x}+{y}")
+        
+        self._build_ui()
+    
+    def _build_ui(self):
+        # Container
+        container = tk.Frame(self.dialog, bg=BG_COLOR, padx=40, pady=30)
+        container.pack(fill=tk.BOTH, expand=True)
+        
+        # Title
+        tk.Label(
+            container,
+            text="ÉTAT 104 - SÉLECTION DE PÉRIODE",
+            font=("Arial", 16, "bold"),
+            bg=BG_COLOR,
+            fg=TEXT_COLOR
+        ).pack(pady=(0, 30))
+        
+        # Période frame
+        period_frame = tk.Frame(container, bg=BG_COLOR)
+        period_frame.pack(fill=tk.X, pady=10)
+        
+        # Date début
+        tk.Label(period_frame, text="Date de début :", bg=BG_COLOR, fg=TEXT_COLOR, font=("Arial", 13)).grid(row=0, column=0, sticky="w", pady=10)
+        
+        # Dates par défaut : année en cours
+        now = datetime.now()
+        start_of_year = datetime(now.year, 1, 1)
+        end_of_year = datetime(now.year, 12, 31)
+        
+        if DateEntry:
+            self.start_date = DateEntry(period_frame, width=15, date_pattern='dd/mm/yyyy', font=("Arial", 12))
+            self.start_date.set_date(start_of_year)
+        else:
+            self.start_date = tk.Entry(period_frame, width=18, font=("Arial", 12))
+            self.start_date.insert(0, start_of_year.strftime("%d/%m/%Y"))
+        
+        self.start_date.grid(row=0, column=1, padx=20, pady=10)
+        
+        # Date fin
+        tk.Label(period_frame, text="Date de fin :", bg=BG_COLOR, fg=TEXT_COLOR, font=("Arial", 13)).grid(row=1, column=0, sticky="w", pady=10)
+        
+        if DateEntry:
+            self.end_date = DateEntry(period_frame, width=15, date_pattern='dd/mm/yyyy', font=("Arial", 12))
+            self.end_date.set_date(end_of_year)
+        else:
+            self.end_date = tk.Entry(period_frame, width=18, font=("Arial", 12))
+            self.end_date.insert(0, end_of_year.strftime("%d/%m/%Y"))
+        
+        self.end_date.grid(row=1, column=1, padx=20, pady=10)
+        
+        # Info
+        info_text = f"Type d'export : {'Écran' if self.export_type == 'screen' else 'PDF' if self.export_type == 'pdf' else 'Word'}"
+        tk.Label(
+            container,
+            text=info_text,
+            font=("Arial", 12, "italic"),
+            bg=BG_COLOR,
+            fg=ACCENT_COLOR
+        ).pack(pady=(20, 0))
+        
+        # Buttons
+        btn_frame = tk.Frame(container, bg=BG_COLOR)
+        btn_frame.pack(pady=30)
+        
+        tk.Button(
+            btn_frame,
+            text="Annuler",
+            command=self.dialog.destroy,
+            bg="#757575",
+            fg="white",
+            font=("Arial", 13),
+            width=12
+        ).pack(side=tk.LEFT, padx=10)
+        
+        tk.Button(
+            btn_frame,
+            text="Générer",
+            command=self.generate,
+            bg=PRIMARY_COLOR,
+            fg="white",
+            font=("Arial", 13, "bold"),
+            width=12
+        ).pack(side=tk.LEFT, padx=10)
+    
+    def generate(self):
+        """Générer l'État 104 selon le type d'export"""
+        try:
+            # Récupérer les dates
+            if DateEntry and isinstance(self.start_date, DateEntry):
+                start_date = self.start_date.get_date().strftime("%Y-%m-%d")
+                end_date = self.end_date.get_date().strftime("%Y-%m-%d")
+            else:
+                # Parser format dd/mm/yyyy
+                start_str = self.start_date.get()
+                end_str = self.end_date.get()
+                start_date = datetime.strptime(start_str, "%d/%m/%Y").strftime("%Y-%m-%d")
+                end_date = datetime.strptime(end_str, "%d/%m/%Y").strftime("%Y-%m-%d")
+            
+            # Récupérer les données
+            data = self.app.logic.get_etat_104_data(start_date, end_date)
+            
+            if not data:
+                messagebox.showinfo("Information", "Aucune donnée pour cette période.")
+                return
+            
+            period = {"start": start_date, "end": end_date}
+            
+            # Selon le type d'export
+            if self.export_type == "screen":
+                self.dialog.destroy()
+                Etat104DisplayDialog(self.app.root, data, period)
+            
+            elif self.export_type == "pdf":
+                from reports import generate_etat_104_pdf
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                pdf_dir = ensure_pdf_export_dir()
+                year = datetime.strptime(start_date, "%Y-%m-%d").year
+                filename = os.path.join(pdf_dir, f"Etat_104_{year}_{timestamp}.pdf")
+                
+                generate_etat_104_pdf(data, start_date, end_date, filename)
+                self.dialog.destroy()
+                
+                try:
+                    preview_and_print_pdf(filename)
+                except Exception as e:
+                    messagebox.showinfo("Succès", f"PDF généré :\n{os.path.basename(filename)}")
+            
+            elif self.export_type == "word":
+                import word_exports
+                filename = word_exports.generate_etat_104_word(data, start_date, end_date)
+                self.dialog.destroy()
+                
+                if messagebox.askyesno("Succès", f"Fichier Word généré :\n{os.path.basename(filename)}\n\nVoulez-vous l'ouvrir ?"):
+                    try:
+                        os.startfile(filename)
+                    except:
+                        pass
+        
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Erreur lors de la génération :\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+
+
+class Etat104DisplayDialog:
+    """Fenêtre d'affichage de l'État 104"""
+    
+    def __init__(self, parent, data, period):
+        self.data = data
+        self.period = period
+        
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("État 104")
+        self.dialog.state('zoomed')
+        self.dialog.configure(bg="white")
+        
+        self._build_ui()
+    
+    def _build_ui(self):
+        # Header avec logo et titre
+        header_frame = tk.Frame(self.dialog, bg="white", height=120)
+        header_frame.pack(fill=tk.X, padx=20, pady=(20, 10))
+        header_frame.pack_propagate(False)
+        
+        # Logo
+        logo_path = "LOGO GICA.png"
+        if not os.path.exists(logo_path):
+            logo_path = "logo_entete.png"
+        
+        if os.path.exists(logo_path):
+            try:
+                logo_img = Image.open(logo_path)
+                logo_img = logo_img.resize((100, 100), Image.Resampling.LANCZOS)
+                logo_photo = ImageTk.PhotoImage(logo_img)
+                logo_lbl = tk.Label(header_frame, image=logo_photo, bg="white")
+                logo_lbl.image = logo_photo
+                logo_lbl.pack(side=tk.LEFT, padx=20)
+            except:
+                pass
+        
+        # Titre
+        year = datetime.strptime(self.period['start'], "%Y-%m-%d").year
+        title_container = tk.Frame(header_frame, bg="white")
+        title_container.pack(side=tk.LEFT, expand=True, fill=tk.BOTH)
+        
+        tk.Label(
+            title_container,
+            text=f"ÉTAT 104 DE L'ANNÉE : {year}",
+            font=("Arial", 20, "bold"),
+            bg="white",
+            fg=PRIMARY_COLOR
+        ).pack(expand=True)
+        
+        tk.Label(
+            title_container,
+            text=f"Période : {self.period['start']} au {self.period['end']}",
+            font=("Arial", 13),
+            bg="white",
+            fg="#666"
+        ).pack()
+        
+        # Buttons frame
+        btn_frame = tk.Frame(self.dialog, bg="white")
+        btn_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        tk.Button(
+            btn_frame,
+            text="📄 Exporter PDF",
+            command=self.export_pdf,
+            bg="#d32f2f",
+            fg="white",
+            font=("Arial", 12, "bold")
+        ).pack(side=tk.RIGHT, padx=5)
+        
+        tk.Button(
+            btn_frame,
+            text="📝 Exporter Word",
+            command=self.export_word,
+            bg="#2b5797",
+            fg="white",
+            font=("Arial", 12, "bold")
+        ).pack(side=tk.RIGHT, padx=5)
+        
+        # Table
+        table_frame = tk.Frame(self.dialog, bg="white")
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        columns = ("N°", "Raison Sociale", "Adresse", "NIF", "Article imposition", "Montant HT", "Montant TVA", "Montant TTC")
+        
+        vsb = ttk.Scrollbar(table_frame, orient="vertical")
+        hsb = ttk.Scrollbar(table_frame, orient="horizontal")
+        
+        self.tree = ttk.Treeview(
+            table_frame,
+            columns=columns,
+            show="headings",
+            yscrollcommand=vsb.set,
+            xscrollcommand=hsb.set
+        )
+        
+        vsb.config(command=self.tree.yview)
+        hsb.config(command=self.tree.xview)
+        
+        # Configure columns
+        self.tree.heading("N°", text="N° d'ordre")
+        self.tree.column("N°", width=80, anchor="center")
+        
+        self.tree.heading("Raison Sociale", text="Raison Sociale / Nom du Client")
+        self.tree.column("Raison Sociale", width=300)
+        
+        self.tree.heading("Adresse", text="Adresse précise")
+        self.tree.column("Adresse", width=250)
+        
+        self.tree.heading("NIF", text="NIF (15 chiffres)")
+        self.tree.column("NIF", width=150, anchor="center")
+        
+        self.tree.heading("Article imposition", text="Article d'imposition (A)")
+        self.tree.column("Article imposition", width=150, anchor="center")
+        
+        self.tree.heading("Montant HT", text="Montant des ventes (HT)")
+        self.tree.column("Montant HT", width=180, anchor="e")
+        
+        self.tree.heading("Montant TVA", text="Montant de la TVA")
+        self.tree.column("Montant TVA", width=180, anchor="e")
+        
+        self.tree.heading("Montant TTC", text="Montant TTC")
+        self.tree.column("Montant TTC", width=180, anchor="e")
+        
+        # Load data
+        total_ht = 0.0
+        total_tva = 0.0
+        total_ttc = 0.0
+        
+        for row in self.data:
+            self.tree.insert("", tk.END, values=(
+                row['numero'],
+                row['raison_sociale'],
+                row['adresse'],
+                row['nif'],
+                row['article_imposition'],
+                f"{row['total_ht']:,.2f}",
+                f"{row['total_tva']:,.2f}",
+                f"{row['total_ttc']:,.2f}"
+            ))
+            total_ht += row['total_ht']
+            total_tva += row['total_tva']
+            total_ttc += row['total_ttc']
+        
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Footer totaux
+        footer = tk.Frame(self.dialog, bg="#f5f5f5", height=50)
+        footer.pack(fill=tk.X, padx=20, pady=(0, 20))
+        footer.pack_propagate(False)
+        
+        tk.Label(footer, text="TOTAUX :", font=("Arial", 14, "bold"), bg="#f5f5f5").pack(side=tk.LEFT, padx=20)
+        tk.Label(footer, text=f"HT : {total_ht:,.2f} DA", font=("Arial", 13, "bold"), bg="#f5f5f5", fg="#1565c0").pack(side=tk.LEFT, padx=20)
+        tk.Label(footer, text=f"TVA : {total_tva:,.2f} DA", font=("Arial", 13, "bold"), bg="#f5f5f5", fg="#1565c0").pack(side=tk.LEFT, padx=20)
+        tk.Label(footer, text=f"TTC : {total_ttc:,.2f} DA", font=("Arial", 13, "bold"), bg="#f5f5f5", fg="#2e7d32").pack(side=tk.LEFT, padx=20)
+    
+    def export_pdf(self):
+        """Exporter en PDF"""
+        try:
+            from reports import generate_etat_104_pdf
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            pdf_dir = ensure_pdf_export_dir()
+            year = datetime.strptime(self.period['start'], "%Y-%m-%d").year
+            filename = os.path.join(pdf_dir, f"Etat_104_{year}_{timestamp}.pdf")
+            
+            generate_etat_104_pdf(self.data, self.period['start'], self.period['end'], filename)
+            
+            try:
+                preview_and_print_pdf(filename)
+            except:
+                messagebox.showinfo("Succès", f"PDF généré :\n{os.path.basename(filename)}")
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Erreur PDF :\n{str(e)}")
+    
+    def export_word(self):
+        """Exporter en Word"""
+        try:
+            import word_exports
+            filename = word_exports.generate_etat_104_word(self.data, self.period['start'], self.period['end'])
+            
+            if messagebox.askyesno("Succès", f"Fichier Word généré :\n{os.path.basename(filename)}\n\nVoulez-vous l'ouvrir ?"):
+                try:
+                    os.startfile(filename)
+                except:
+                    pass
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Erreur Word :\n{str(e)}")
+
+
 # See MainApplication below to add the Sidebar button
+

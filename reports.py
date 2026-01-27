@@ -1461,7 +1461,164 @@ def generate_pareto_pdf(data: Dict[str, Any], start_date: str, end_date: str, fi
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     return filename
 
+def generate_etat_104_pdf(data: list, start_date: str, end_date: str, output_path: str):
+    """
+    Générer PDF de l'État 104 (Ventes par client).
+    
+    Format standard avec:
+    - En-tête avec logo GICA
+    - Titre : "ETAT 104 DE L'ANNÉE : [année]"
+    - Tableau avec totaux
+    - Numérotation automatique
+    """
+    from datetime import datetime
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    import os
+    
+    # Create PDF with custom canvas for headers
+    doc = SimpleDocTemplate(
+        output_path,
+        pagesize=landscape(A4),
+        leftMargin=1.5*cm,
+        rightMargin=1.5*cm,
+        topMargin=2*cm,
+        bottomMargin=1.5*cm
+    )
+    
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    # En-tête avec logo
+    logo_path = "LOGO GICA.png"
+    if not os.path.exists(logo_path):
+        logo_path = "logo_entete.png"
+    
+    if os.path.exists(logo_path):
+        try:
+            logo = RLImage(logo_path, width=2*cm, height=2*cm)
+            elements.append(logo)
+            elements.append(Spacer(1, 0.3*cm))
+        except:
+            pass
+    
+    # Titre principal
+    year = datetime.strptime(start_date, "%Y-%m-%d").year
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=16,
+        textColor=colors.HexColor('#1a237e'),
+        alignment=TA_CENTER,
+        spaceAfter=10,
+        fontName='Helvetica-Bold'
+    )
+    
+    title = Paragraph(f"<b>ÉTAT 104 DE L'ANNÉE : {year}</b>", title_style)
+    elements.append(title)
+    
+    subtitle_style = ParagraphStyle(
+        'Subtitle',
+        parent=styles['Normal'],
+        fontSize=10,
+        alignment=TA_CENTER,
+        spaceAfter=20
+    )
+    
+    subtitle = Paragraph(f"Période : {start_date} au {end_date}", subtitle_style)
+    elements.append(subtitle)
+    elements.append(Spacer(1, 0.5*cm))
+    
+    # Tableau de données
+    table_data = [[
+        "N° d'ordre",
+        "Raison Sociale / Nom du Client",
+        "Adresse précise",
+        "NIF\n(15 chiffres)",
+        "Article\nd'imposition\n(A)",
+        "Montant des\nventes (HT)",
+        "Montant de\nla TVA",
+        "Montant TTC"
+    ]]
+    
+    total_ht = 0.0
+    total_tva = 0.0
+    total_ttc = 0.0
+    
+    for row in data:
+        table_data.append([
+            str(row['numero']),
+            row['raison_sociale'],
+            row['adresse'],
+            row['nif'],
+            row['article_imposition'],
+            format_currency_report(row['total_ht']),
+            format_currency_report(row['total_tva']),
+            format_currency_report(row['total_ttc'])
+        ])
+        total_ht += row['total_ht']
+        total_tva += row['total_tva']
+        total_ttc += row['total_ttc']
+    
+    # Ligne de total
+    table_data.append([
+        "",
+        "",
+        "",
+        "",
+        "TOTAL",
+        format_currency_report(total_ht),
+        format_currency_report(total_tva),
+        format_currency_report(total_ttc)
+    ])
+    
+    # Créer le tableau
+    table = Table(table_data, colWidths=[1.5*cm, 5*cm, 4.5*cm, 3*cm, 2.5*cm, 3*cm, 3*cm, 3*cm])
+    
+    # Style du tableau
+    table.setStyle(TableStyle([
+        # En-tête
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a237e')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+        ('TOPPADDING', (0, 0), (-1, 0), 10),
+        
+        # Corps du tableau
+        ('FONTNAME', (0, 1), (-1, -2), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -2), 8),
+        ('ALIGN', (0, 1), (0, -1), 'CENTER'),  # N° centré
+        ('ALIGN', (3, 1), (4, -1), 'CENTER'),  # NIF et Article centrés
+        ('ALIGN', (5, 1), (-1, -1), 'RIGHT'),  # Montants à droite
+        ('GRID', (0, 0), (-1, -2), 0.5, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f5f5f5')]),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        
+        # Ligne de total
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#e3f2fd')),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, -1), (-1, -1), 9),
+        ('LINEABOVE', (0, -1), (-1, -1), 2, colors.HexColor('#1a237e')),
+        ('ALIGN', (4, -1), (4, -1), 'RIGHT'),
+        ('ALIGN', (5, -1), (-1, -1), 'RIGHT'),
+    ]))
+    
+    elements.append(table)
+    
+    # Build PDF
+    doc.build(elements, canvasmaker=NumberedCanvas)
+    print(f"✅ PDF État 104 généré : {output_path}")
+    return output_path
+
+
 def generate_cockpit_pdf(data: Dict[str, Any]):
+
     """
     Generate Master Dashboard (Cockpit) PDF (One-Page Landscape).
     """
@@ -1603,3 +1760,856 @@ def generate_cockpit_pdf(data: Dict[str, Any]):
     doc.build(story)
     return filename
 
+
+
+def generate_invoice_excel(invoice_data, output_path=None):
+    """
+    Générer Facture au format Excel - EXACTEMENT identique à l'image de référence
+    Optimisé pour:
+    - Consultation à l'écran
+    - Impression directe sur imprimante matricielle 80 colonnes
+    - Alignement parfait avec papier préimprimé
+    """
+    if not output_path:
+        directory = "Exports_Excel"
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        clean_name = "".join([c for c in invoice_data['raison_sociale'] if c.isalnum() or c in (' ', '_')]).strip()
+        output_path = os.path.join(directory, f"Facture_{invoice_data['numero']}_{clean_name}_{timestamp}.xlsx")
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Facture"
+    
+    # ========================================
+    # CONFIGURATION IMPRIMANTE MATRICIELLE 80 COLONNES
+    # ========================================
+    
+    # Largeurs de colonnes optimisées (en caractères Excel)
+    # Total ≈ 80 colonnes pour imprimante matricielle
+    colonnes_width = {
+        'A': 3,   'B': 8,   'C': 8,   'D': 25,  'E': 3,
+        'F': 5,   'G': 8,   'H': 10,  'I': 12,  'J': 8,
+        'K': 15,  'L': 5,   'M': 5,   'N': 5,   'O': 12,
+        'P': 5,   'Q': 5,   'R': 5,   'S': 5,   'T': 5,
+        'U': 5,   'V': 5,   'W': 5,   'X': 20,  'Y': 5,
+        'Z': 5
+    }
+    
+    for col, width in colonnes_width.items():
+        ws.column_dimensions[col].width = width
+    
+    # ========================================
+    # STYLES
+    # ========================================
+    
+    font_normal = Font(name='Cambria', size=10)
+    font_bold = Font(name='Cambria', size=10, bold=True)
+    font_bold_11 = Font(name='Cambria', size=11, bold=True)
+    font_red_bold = Font(name='Cambria', size=11, bold=True, color='FF0000')
+    
+    align_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    align_left = Alignment(horizontal='left', vertical='top', wrap_text=True)
+    align_right = Alignment(horizontal='right', vertical='center')
+    
+    # ========================================
+    # ZONE EN-TÊTE (LIGNES 1-5)
+    # ========================================
+    
+    # Ligne 3: N° FACTURE (Colonne O-P) - En ROUGE selon image
+    ws['O3'] = invoice_data.get('numero', '')
+    ws['O3'].font = font_red_bold
+    ws['O3'].alignment = align_center
+    
+    # Ligne 5: Date avec jour de la semaine en français
+    try:
+        dt = datetime.strptime(invoice_data['date_facture'], '%Y-%m-%d')
+        # Formatage date française
+        try:
+            import locale
+            try:
+                locale.setlocale(locale.LC_TIME, 'fr_FR.UTF-8')
+            except:
+                try:
+                    locale.setlocale(locale.LC_TIME, 'French_France.1252')
+                except:
+                    locale.setlocale(locale.LC_TIME, 'fra_fra')
+        except:
+            pass
+        
+        try:
+            date_with_day = dt.strftime('%A %d %B %Y')
+        except:
+            # Fallback manuel
+            mois_fr = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin',
+                      'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre']
+            jours_fr = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche']
+            jour_semaine = jours_fr[dt.weekday()]
+            date_with_day = f"{jour_semaine} {dt.day} {mois_fr[dt.month-1]} {dt.year}"
+    except:
+        date_with_day = invoice_data['date_facture']
+    
+    ws['O5'] = date_with_day
+    ws['O5'].font = font_normal
+    ws['O5'].alignment = align_left
+    
+    # ========================================
+    # ZONE CLIENT GAUCHE (LIGNES 6-12)
+    # ========================================
+    
+    # Ligne 6-7: Catégorie + Code Client (ex: "SPA  0216EPN4")
+    categorie = invoice_data.get('client_categorie', invoice_data.get('categorie', ''))
+    code_client = invoice_data.get('code_client', '')
+    
+    if categorie or code_client:
+        client_cat_code = f"{categorie}  {code_client}".strip()
+        ws['D7'] = client_cat_code
+        ws['D7'].font = font_bold
+        ws['D7'].alignment = align_left
+    
+    # Ligne 9: Raison Sociale (ex: "INFRARAIL EPE SPA")
+    ws['D9'] = invoice_data.get('raison_sociale', '')
+    ws['D9'].font = font_bold
+    ws['D9'].alignment = align_left
+    
+    # Ligne 10: Adresse
+    ws['D10'] = invoice_data.get('adresse', '')
+    ws['D10'].font = font_bold
+    ws['D10'].alignment = align_left
+    
+    # Ligne 11: NIF + Article Imposition
+    nif = invoice_data.get('nif', '')
+    article_imp = invoice_data.get('article_imposition', '')
+    
+    if nif or article_imp:
+        ws['D11'] = f"NIF {nif}   {article_imp}".strip()
+        ws['D11'].font = font_bold
+        ws['D11'].alignment = align_left
+    
+    # ========================================
+    # ZONE CONVENTION DROITE (LIGNE 8)
+    # ========================================
+    
+    # Ligne 8 colonne X: Convention (ex: "convention n°02/2025")
+    convention = invoice_data.get('convention', invoice_data.get('contrat_code', ''))
+    if convention:
+        ws['X8'] = f"convention n°{convention}"
+        ws['X8'].font = font_normal
+        ws['X8'].alignment = align_left
+    
+    # ========================================
+    # ZONE PAIEMENT DROITE (LIGNES 10-13)
+    # ========================================
+    
+    ws['K10'] = "Virement"
+    ws['K10'].font = font_bold
+    ws['K10'].alignment = align_left
+    
+    ws['K11'] = "BNA OUED SMAR"
+    ws['K11'].font = font_bold
+    ws['K11'].alignment = align_left
+    
+    ws['K12'] = "00 0018443"
+    ws['K12'].font = font_bold
+    ws['K12'].alignment = align_left
+    
+    ws['K13'] = "CMP/ prest n° 0"
+    ws['K13'].font = font_bold
+    ws['K13'].alignment = align_left
+    
+    # ========================================
+    # ZONE PRODUITS (LIGNE 17+)
+    # ========================================
+    
+    row_produit = 17
+    
+    for ligne in invoice_data['lignes']:
+        # Colonne A-C: Code produit ou début nom (ex: "CAL-SPC")
+        product_code = ligne.get('code_produit', '')
+        product_nom = ligne.get('product_nom', '')
+        
+        # Si pas de code séparé, prendre début du nom
+        if product_code:
+            ws[f'A{row_produit}'] = product_code
+        else:
+            ws[f'A{row_produit}'] = product_nom[:10]
+        ws[f'A{row_produit}'].font = font_bold
+        ws[f'A{row_produit}'].alignment = align_left
+        
+        # Colonne D-F: Description produit (ex: "CEMBRAS A 12.5 N Prem G")
+        ws[f'D{row_produit}'] = product_nom
+        ws[f'D{row_produit}'].font = font_bold
+        ws[f'D{row_produit}'].alignment = align_left
+        
+        # Colonne G: Unité (ex: "Tonne")
+        ws[f'G{row_produit}'] = ligne.get('unite', '')
+        ws[f'G{row_produit}'].font = font_bold
+        ws[f'G{row_produit}'].alignment = align_center
+        
+        # Colonne H: Quantité (ex: "40")
+        qte = ligne.get('quantite', 0)
+        ws[f'H{row_produit}'] = f"{qte:,.0f}".replace(",", " ")
+        ws[f'H{row_produit}'].font = font_bold
+        ws[f'H{row_produit}'].alignment = align_center
+        
+        # Colonne I: Prix Unitaire (ex: "6,214.00")
+        pu = ligne.get('prix_unitaire', 0.0)
+        ws[f'I{row_produit}'] = f"{pu:,.2f}".replace(",", " ").replace(".", ",")
+        ws[f'I{row_produit}'].font = font_bold
+        ws[f'I{row_produit}'].alignment = align_right
+        
+        # Colonne J-K: Montant (ex: "248,560.00")
+        montant = ligne.get('montant', 0.0)
+        ws[f'J{row_produit}'] = f"{montant:,.2f}".replace(",", " ").replace(".", ",")
+        ws[f'J{row_produit}'].font = font_bold
+        ws[f'J{row_produit}'].alignment = align_right
+        
+        row_produit += 1
+    
+    # ========================================
+    # ZONE REMISE (LIGNE 19 SI APPLICABLE)
+    # ========================================
+    
+    row_remise = row_produit + 1
+    
+    # Vérifier si remise
+    has_remise = invoice_data.get('montant_remise', 0) > 0 or any(l.get('taux_remise', 0) > 0 for l in invoice_data['lignes'])
+    
+    if has_remise:
+        ws[f'D{row_remise}'] = "Remise"
+        ws[f'D{row_remise}'].font = font_bold
+        ws[f'D{row_remise}'].alignment = align_left
+        
+        # Calculer remise totale
+        total_remise = sum(l.get('montant', 0) * l.get('taux_remise', 0) / 100 for l in invoice_data['lignes'])
+        
+        ws[f'H{row_remise}'] = "0%"
+        ws[f'H{row_remise}'].font = font_bold
+        ws[f'H{row_remise}'].alignment = align_center
+        
+        ws[f'J{row_remise}'] = f"{total_remise:,.2f}".replace(",", " ").replace(".", ",")
+        ws[f'J{row_remise}'].font = font_bold
+        ws[f'J{row_remise}'].alignment = align_right
+        
+        row_produit = row_remise + 1
+    
+    # ========================================
+    # ZONE TOTAUX (LIGNES 22-24)
+    # ========================================
+    
+    row_total = row_produit + 2
+    
+    # Ligne 22: Montant en lettres (gauche) + Total HT (droite)
+    from utils import nombre_en_lettres
+    montant_lettres = nombre_en_lettres(invoice_data['montant_ttc'])
+    
+    ws[f'B{row_total}'] = montant_lettres
+    ws[f'B{row_total}'].font = font_bold
+    ws[f'B{row_total}'].alignment = align_left
+    
+    ws[f'J{row_total}'] = f"{invoice_data['montant_ht']:,.2f}".replace(",", " ").replace(".", ",")
+    ws[f'J{row_total}'].font = font_bold
+    ws[f'J{row_total}'].alignment = align_right
+    
+    # Ligne 23: TVA 19%
+    row_total += 1
+    ws[f'J{row_total}'] = f"{invoice_data['montant_tva']:,.2f}".replace(",", " ").replace(".", ",")
+    ws[f'J{row_total}'].font = font_bold
+    ws[f'J{row_total}'].alignment = align_right
+    
+    # Ligne 24: Total TTC
+    row_total += 1
+    ws[f'J{row_total}'] = f"{invoice_data['montant_ttc']:,.2f}".replace(",", " ").replace(".", ",")
+    ws[f'J{row_total}'].font = font_bold
+    ws[f'J{row_total}'].alignment = align_right
+    
+    # ========================================
+    # ZONE TRANSPORT (LIGNES 26-27)
+    # ========================================
+    
+    row_transport = row_total + 2
+    
+    # Ligne 26: Chauffeur (colonne B)
+    chauffeur = invoice_data.get('chauffeur', '')
+    if chauffeur:
+        ws[f'B{row_transport}'] = f"Chauffeur : {chauffeur}"
+        ws[f'B{row_transport}'].font = font_bold
+        ws[f'B{row_transport}'].alignment = align_left
+    
+    # Ligne 27: Matricule (colonne G combinaison tracteur/remorque)
+    matricule_tracteur = invoice_data.get('matricule_tracteur', '')
+    matricule_remorque = invoice_data.get('matricule_remorque', '')
+    
+    if matricule_tracteur or matricule_remorque:
+        # Format: "06703-313-027/007332-013-03"
+        if matricule_tracteur and matricule_remorque:
+            matricule_complet = f"{matricule_tracteur}/{matricule_remorque}"
+        else:
+            matricule_complet = matricule_tracteur or matricule_remorque
+            
+        ws[f'G{row_transport}'] = f"Matricule : {matricule_complet}"
+        ws[f'G{row_transport}'].font = font_bold
+        ws[f'G{row_transport}'].alignment = align_left
+    
+    # ========================================
+    # ZONE SIGNATURE (LIGNE 29)
+    # ========================================
+    
+    row_signature = row_transport + 2
+    
+    ws[f'B{row_signature}'] = "HAMMICHE MAKHLOUF"
+    ws[f'B{row_signature}'].font = font_bold
+    ws[f'B{row_signature}'].alignment = align_left
+    
+    # ========================================
+    # CONFIGURATION IMPRESSION MATRICIELLE
+    # ========================================
+    
+    # Page Setup
+    ws.page_setup.paperSize = 9  # A4
+    ws.page_setup.orientation = 'portrait'
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0  # Auto
+    
+    # Marges réduites pour imprimante matricielle
+    ws.page_margins.left = 0.2
+    ws.page_margins.right = 0.2
+    ws.page_margins.top = 0.2
+    ws.page_margins.bottom = 0.2
+    ws.page_margins.header = 0.1
+    ws.page_margins.footer = 0.1
+    
+    # Print Options
+    ws.print_options.horizontalCentered = False
+    ws.print_options.verticalCentered = False
+    ws.print_options.gridLines = False
+    
+    # Masquer les lignes de grille à l'écran
+    ws.sheet_view.showGridLines = False
+    
+    # Zone d'impression (ajuster selon besoins)
+    ws.print_area = f'A1:Z{row_signature + 5}'
+    
+    # ========================================
+    # SAUVEGARDE
+    # ========================================
+    
+    wb.save(output_path)
+    return output_path
+
+
+def generate_invoice_pdf_matricielle(invoice_data, output_path=None):
+    """
+    Générer Facture au format PDF - Optimisé pour Imprimante Matricielle 80 colonnes
+    Positionnement absolu pour éviter les problèmes de troncature
+    Format identique à l'image de référence
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import cm, mm
+    from reportlab.lib.colors import HexColor, black, red
+    
+    if not output_path:
+        directory = "Exports_PDF"
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        clean_name = "".join([c for c in invoice_data['raison_sociale'] if c.isalnum() or c in (' ', '_')]).strip()
+        output_path = os.path.join(directory, f"Facture_Matricielle_{invoice_data['numero']}_{clean_name}_{timestamp}.pdf")
+    
+    # Créer le canvas PDF
+    c = canvas.Canvas(output_path, pagesize=A4)
+    width, height = A4  # 595 x 842 points (210mm x 297mm)
+    
+    # ========================================
+    # CONFIGURATION POLICE
+    # ========================================
+    
+    # Police principale
+    font_normal = "Helvetica"
+    font_bold = "Helvetica-Bold"
+    size_normal = 9
+    size_title = 11
+    size_small = 8
+    
+    # ========================================
+    # POSITIONS ABSOLUES - BASÉES SUR PRÉIMPRIMÉ RÉEL
+    # Système Y inversé : 0 en BAS de page
+    # Mesures depuis analyse professionnelle
+    # ========================================
+    
+    # Marges physiques imprimante matricielle
+    margin_left = 15 * mm  # Après perforations
+    margin_right = 15 * mm
+    
+    # Positions Y (depuis le BAS de la page)
+    # Conversion : Y_PDF = 297mm - Y_depuis_haut
+    
+    # Zone N° Facture et Date (ligne ~24mm depuis haut = 273mm depuis bas)
+    y_facture_num = 273 * mm  # N° Facture ROUGE
+    y_date = 267 * mm         # Date complète
+    
+    # Zone GICA (Informations fixes - lignes 36-40mm depuis haut)
+    y_gica_ligne1 = 261 * mm  # 297 - 36 = 261
+    y_gica_ligne2 = 257 * mm  # 297 - 40 = 257
+    
+    # Zone Code Client (ligne 44mm depuis haut = 253mm depuis bas)
+    y_client_cat = 253 * mm
+    
+    # Cadre CLIENT (lignes 50-80mm depuis haut)
+    y_client_nom = 241 * mm      # 297 - 56 = 241
+    y_client_adresse = 232 * mm  # 297 - 65 = 232
+    y_client_rc = 227 * mm       # 297 - 70 = 227
+    y_client_nis = 222 * mm      # 297 - 75 = 222
+    y_client_nif = 217 * mm      # 297 - 80 = 217 (NIF + Article)
+    y_client_date_enlev = 212 * mm  # 297 - 85 = 212
+    
+    # Cadre COMMANDE/PAIEMENT (droite, lignes 50-80mm)
+    y_paiement_reglement = 233 * mm  # 297 - 64 = 233
+    y_paiement_banque = 228 * mm     # 297 - 69 = 228
+    y_paiement_compte = 223 * mm     # 297 - 74 = 223
+    
+    # Zone Convention (si existe)
+    y_convention = 253 * mm  # Même ligne que catégorie
+    x_convention = 125 * mm  # Cadre droit
+    
+    # Zone TABLE PRODUITS (début ligne 95mm depuis haut = 202mm depuis bas)
+    y_produit_start = 202 * mm
+    line_height = 5 * mm
+    
+    # Colonnes produits (positions X exactes selon préimprimé)
+    x_code = 16 * mm          # Colonne DESIGNATION début
+    x_description = 42 * mm   # Description complète (déplacé vers droite pour éviter chevauchement)
+    x_unite = 119 * mm        # Colonne U M (centré)
+    x_quantite = 138 * mm     # Colonne QUANTITE (centré)
+    x_prix_unit = 155 * mm    # Colonne PRIX UNITAIRE (droite, déplacé vers gauche)
+    x_montant = 180 * mm      # Colonne MONTANT (droite, déplacé vers gauche)
+    
+    # Zone Remise (ligne 105mm depuis haut = 192mm depuis bas)
+    y_remise = 192 * mm
+    
+    # Zone MONTANT EN LETTRES (ligne 120mm depuis haut = 177mm depuis bas)
+    y_montant_lettres_l1 = 177 * mm
+    y_montant_lettres_l2 = 172 * mm  # Si multi-lignes
+    x_montant_lettres = 16 * mm
+    
+    # Zone TOTAUX (cadre droite, lignes 118-130mm depuis haut)
+    y_total_ht = 179 * mm   # 297 - 118 = 179
+    y_total_tva = 173 * mm  # 297 - 124 = 173
+    y_total_ttc = 167 * mm  # 297 - 130 = 167
+    x_totaux_label = 148 * mm
+    x_totaux_valeur = 180 * mm  # Aligné avec colonne MONTANT du tableau (POSITION FLÈCHE JAUNE)
+    
+    # Zone TRANSPORT (lignes 142-148mm depuis haut)
+    y_chauffeur = 160 * mm     # 297 - 142 = 155 (AJUSTÉ VERS HAUT)
+    y_matricule = 154 * mm     # 297 - 148 = 149 (AJUSTÉ VERS HAUT)
+    x_chauffeur = 16 * mm      # Après label "Chauffeur :" (POSITION FLÈCHE ROUGE - Aligné avec montant en lettres)
+    x_matricule = 16 * mm      # Après label "Matricule :" (POSITION FLÈCHE ROUGE)
+    
+    # Zone SIGNATURE (ligne 163mm depuis haut = 134mm depuis bas)
+    y_signature = 139 * mm     # AJUSTÉ VERS HAUT
+    x_signature = 16 * mm
+    
+    # Positions X spécifiques
+    x_paiement = 155 * mm      # Valeurs cadre paiement (droite)
+    x_client_cat_code = 170 * mm  # Catégorie + Code (alignés droite)
+    
+    # ========================================
+    # ZONE EN-TÊTE
+    # ========================================
+    
+    # N° FACTURE (Rouge, Gras)
+    c.setFont(font_bold, size_title)
+    c.setFillColor(red)
+    c.drawString(150 * mm, y_facture_num, str(invoice_data.get('numero', '')))
+    
+    # ========================================
+    # ZONE GICA (Informations Fixes Entreprise - GRIS)
+    # ========================================
+    
+    c.setFont(font_bold, size_small)  # Changé en gras
+    c.setFillColor(black)
+    
+    # Ligne 1 : NIF GICA + Copie B + Art + RC
+    info_gica_1 = "Nif 000029096275512    Art 135135190093    Rc 00890002675    02316"
+    c.drawString(margin_left, y_gica_ligne1, info_gica_1)
+    
+    # Ligne 2 : Copie B + autres infos fixes
+    info_gica_2 = "Copie B n° : 001 00694 03508  000 315 61 81036 OUED SMAR"
+    c.drawString(margin_left, y_gica_ligne2, info_gica_2)
+    
+    # Date avec jour de la semaine
+    c.setFont(font_normal, size_normal)
+    c.setFillColor(black)
+    
+    try:
+        dt = datetime.strptime(invoice_data['date_facture'], '%Y-%m-%d')
+        try:
+            import locale
+            try:
+                locale.setlocale(locale.LC_TIME, 'fr_FR.UTF-8')
+            except:
+                try:
+                    locale.setlocale(locale.LC_TIME, 'French_France.1252')
+                except:
+                    locale.setlocale(locale.LC_TIME, 'fra_fra')
+        except:
+            pass
+        
+        try:
+            date_with_day = dt.strftime('%A %d %B %Y')
+        except:
+            mois_fr = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin',
+                      'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre']
+            jours_fr = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche']
+            jour_semaine = jours_fr[dt.weekday()]
+            date_with_day = f"{jour_semaine} {dt.day} {mois_fr[dt.month-1]} {dt.year}"
+    except:
+        date_with_day = invoice_data['date_facture']
+    
+    c.drawString(150 * mm, y_date, date_with_day)
+    
+    # ========================================
+    # ZONE CLIENT GAUCHE
+    # ========================================
+    
+    c.setFont(font_bold, size_normal)
+    
+    # Catégorie + Code Client (ex: SPA  0216EPN4) - Au dessus du mode de paiement
+    categorie = invoice_data.get('client_categorie', invoice_data.get('categorie', ''))
+    code_client = invoice_data.get('code_client', '')
+    if categorie or code_client:
+        client_cat_code = f"{categorie}  {code_client}".strip()
+        c.drawString(x_paiement, y_paiement_reglement + 10*mm, client_cat_code)  # Juste au-dessus du paiement
+    
+    # Raison Sociale
+    c.drawString(margin_left, y_client_nom, invoice_data.get('raison_sociale', ''))
+    
+    # Adresse
+    c.drawString(margin_left, y_client_adresse, invoice_data.get('adresse', ''))
+    
+    # RC Client (nouvelle ligne)
+    rc = invoice_data.get('rc', '')
+    if rc:
+        c.drawString(margin_left, y_client_rc, f"Rc {rc}".strip())
+    
+    # NIF Client + Article Imposition + RIN
+    nif = invoice_data.get('nif', '')
+    article_imp = invoice_data.get('article_imposition', '')
+    if nif or article_imp:
+        info_client = f"NIF {nif}   Art  TIN {article_imp}".strip()
+        c.drawString(margin_left, y_client_nif, info_client)
+    
+    # ========================================
+    # ZONE CONVENTION (Déplacée vers CADRE BLEU)
+    # ========================================
+    
+    # Convention déplacée vers cadre bleu (voir ligne ~2398)
+    
+    # ========================================
+    # ZONE PAIEMENT (Droite)
+    # ========================================
+    
+    c.setFont(font_bold, size_normal)
+    c.drawString(x_paiement, y_paiement_reglement, "Virement")
+    c.drawString(x_paiement, y_paiement_banque, "BNA OUED SMAR")
+    c.drawString(x_paiement, y_paiement_compte, "00 0018443")
+    c.drawString(x_paiement, y_paiement_compte - 5*mm, "CMP/ prest n° 0")
+    
+    # ========================================
+    # ZONE PRODUITS
+    # ========================================
+    
+    c.setFont(font_bold, size_normal)
+    y_current = y_produit_start
+    
+    for ligne in invoice_data['lignes']:
+        # Code produit (colonne A) - Tronqué si trop long
+        product_code = ligne.get('code_produit', '')
+        product_nom = ligne.get('product_nom', '')
+        
+        if product_code:
+            code_display = product_code[:10]  # Max 10 caractères
+        else:
+            code_display = product_nom[:10]
+        
+        c.drawString(x_code, y_current, code_display)
+        
+        # Description produit (colonne D) - Peut être long
+        # Tronquer si nécessaire ou utiliser une police plus petite
+        description = product_nom
+        if len(description) > 40:
+            # Couper intelligemment
+            description = description[:37] + "..."
+        c.drawString(x_description, y_current, description)
+        
+        # Unité
+        c.drawString(x_unite, y_current, ligne.get('unite', ''))
+        
+        # Quantité (centré)
+        qte = ligne.get('quantite', 0)
+        qte_str = f"{qte:,.0f}".replace(",", " ")
+        c.drawCentredString(x_quantite + 10*mm, y_current, qte_str)
+        
+        # Prix Unitaire (aligné à droite)
+        pu = ligne.get('prix_unitaire', 0.0)
+        pu_str = f"{pu:,.2f}".replace(",", " ").replace(".", ",")
+        c.drawRightString(x_prix_unit + 25*mm, y_current, pu_str)
+        
+        # Montant (aligné à droite)
+        montant = ligne.get('montant', 0.0)
+        montant_str = f"{montant:,.2f}".replace(",", " ").replace(".", ",")
+        c.drawRightString(x_montant + 25*mm, y_current, montant_str)
+        
+        y_current -= line_height
+    
+    # ========================================
+    # ZONE REMISE (si applicable)
+    # ========================================
+    
+    has_remise = invoice_data.get('montant_remise', 0) > 0 or any(l.get('taux_remise', 0) > 0 for l in invoice_data['lignes'])
+    
+    if has_remise:
+        y_current -= line_height
+        c.setFont(font_bold, size_normal)  # Assurer que c'est en gras
+        c.drawString(x_description, y_current, "Remise")
+        
+        total_remise = sum(l.get('montant', 0) * l.get('taux_remise', 0) / 100 for l in invoice_data['lignes'])
+        
+        c.drawCentredString(x_quantite + 10*mm, y_current, "0%")
+        c.drawRightString(x_montant + 25*mm, y_current, f"{total_remise:,.2f}".replace(",", " ").replace(".", ","))
+        
+        y_current -= line_height
+    
+    # ========================================
+    # ZONE MONTANT EN LETTRES (CADRE BLEU)
+    # ========================================
+    
+    # Montant en lettres (CADRE BLEU - Ligne 1)
+    from utils import nombre_en_lettres
+    montant_lettres = nombre_en_lettres(invoice_data['montant_ttc'])
+    
+    c.setFont(font_bold, size_small)
+    c.drawString(x_chauffeur, y_chauffeur, montant_lettres)
+    
+    # Convention N° (CADRE BLEU - Ligne 2) - EN BLEU
+    convention = invoice_data.get('convention', invoice_data.get('contrat_code', ''))
+    c.setFillColor(HexColor('#0000FF'))  # Couleur bleue
+    c.setFont(font_bold, size_normal)
+    convention_text = f"Convention N° : {convention}" if convention else "Convention N° :"
+    c.drawString(x_chauffeur, y_chauffeur - 6*mm, convention_text)
+    c.setFillColor(black)  # Revenir au noir
+    
+    # ========================================
+    # ZONE TRANSPORT (MOVED TO TOP)
+    # ========================================
+    
+    c.setFont(font_bold, size_normal)
+    
+    # Chauffeur (décalé pour éviter chevauchement avec Convention)
+    chauffeur = invoice_data.get('chauffeur', '')
+    if chauffeur:
+        c.drawString(x_chauffeur, y_matricule - 6*mm, f"Chauffeur : {chauffeur}")
+    
+    # Matricule (combiné tracteur + remorque)
+    matricule_tracteur = invoice_data.get('matricule_tracteur', '')
+    matricule_remorque = invoice_data.get('matricule_remorque', '')
+    
+    if matricule_tracteur or matricule_remorque:
+        if matricule_tracteur and matricule_remorque:
+            matricule_complet = f"{matricule_tracteur}/{matricule_remorque}"
+        else:
+            matricule_complet = matricule_tracteur or matricule_remorque
+        
+        c.drawString(x_matricule, y_matricule - 11*mm, f"Matricule : {matricule_complet}")
+    
+    # ========================================
+    # ZONE SIGNATURE (MOVED BEFORE AMOUNT)
+    # ========================================
+    
+    c.drawString(x_chauffeur, y_signature, "L'AGENT COMMERCIAL")
+    
+    # ========================================
+    # ZONE TOTAUX (SANS MONTANT EN LETTRES)
+    # ========================================
+    
+    y_totaux_base = y_current - 10*mm
+    
+    # Total HT (DROITE)
+    c.setFont(font_bold, size_normal)
+    c.drawRightString(x_totaux_valeur + 25*mm, y_totaux_base, 
+                      f"{invoice_data['montant_ht']:,.2f}".replace(",", " ").replace(".", ","))
+    
+    # TVA 19%
+    y_tva = y_totaux_base - 5*mm
+    c.drawRightString(x_totaux_valeur + 25*mm, y_tva,
+                      f"{invoice_data['montant_tva']:,.2f}".replace(",", " ").replace(".", ","))
+    
+    # Total TTC
+    y_ttc = y_tva - 5*mm
+    c.drawRightString(x_totaux_valeur + 25*mm, y_ttc,
+                      f"{invoice_data['montant_ttc']:,.2f}".replace(",", " ").replace(".", ","))
+
+    
+    # ========================================
+    # SAUVEGARDE
+    # ========================================
+    
+    c.save()
+    return output_path
+
+
+def generate_calibration_pdf(output_path=None):
+    """
+    Générer PDF de Calibration pour Tests d'Alignement
+    Grille de repères + marqueurs de position pour tous les champs
+    À imprimer sur papier vierge et superposer avec préimprimé
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import mm
+    from reportlab.lib.colors import black, red, blue, green, gray
+    
+    if not output_path:
+        directory = "Exports_PDF"
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(directory, f"Calibration_Grid_{timestamp}.pdf")
+    
+    c = canvas.Canvas(output_path, pagesize=A4)
+    width, height = A4  # 210mm x 297mm
+    
+    # Grille de calibration 10mm x 10mm
+    c.setStrokeColor(gray)
+    c.setLineWidth(0.2)
+    
+    # Lignes verticales
+    for x_pos in range(0, int(210/10) + 1):
+        x = x_pos * 10 * mm
+        if x_pos % 5 == 0:
+            c.setLineWidth(0.5)
+            c.setStrokeColor(black)
+        else:
+            c.setLineWidth(0.2)
+            c.setStrokeColor(gray)
+        c.line(x, 0, x, height)
+        if x_pos % 2 == 0:
+            c.setFont("Helvetica", 6)
+            c.setFillColor(black)
+            c.drawString(x + 1*mm, height - 5*mm, f"{x_pos*10}")
+    
+    # Lignes horizontales
+    for y_pos in range(0, int(297/10) + 1):
+        y = y_pos * 10 * mm
+        if y_pos % 5 == 0:
+            c.setLineWidth(0.5)
+            c.setStrokeColor(black)
+        else:
+            c.setLineWidth(0.2)
+            c.setStrokeColor(gray)
+        c.line(0, y, width, y)
+        if y_pos % 2 == 0:
+            c.setFont("Helvetica", 6)
+            c.setFillColor(black)
+            c.drawString(2*mm, y + 1*mm, f"{y_pos*10}")
+    
+    # Fonction marqueur
+    def draw_marker(x, y, label, color=red, size=8):
+        c.setStrokeColor(color)
+        c.setLineWidth(0.5)
+        c.line(x - 2*mm, y, x + 2*mm, y)
+        c.line(x, y - 2*mm, x, y + 2*mm)
+        c.circle(x, y, 1*mm)
+        c.setFont("Helvetica-Bold", size)
+        c.setFillColor(color)
+        c.drawString(x + 3*mm, y - 1*mm, label)
+    
+    # Titre
+    c.setFont("Helvetica-Bold", 14)
+    c.setFillColor(black)
+    c.drawCentredString(width/2, height - 5*mm, "GRILLE DE CALIBRATION - PRÉIMPRIMÉ GICA")
+    
+    # Marqueurs de position
+    draw_marker(185*mm, 273*mm, "N° Facture", red, 7)
+    draw_marker(170*mm, 267*mm, "Date", blue, 7)
+    
+    c.setStrokeColor(green)
+    c.setLineWidth(0.5)
+    c.rect(15*mm, 257*mm, 180*mm, 4*mm)
+    draw_marker(15*mm, 261*mm, "GICA L1", green, 6)
+    
+    draw_marker(170*mm, 253*mm, "Cat+Code", blue, 6)
+    
+    # Cadre client
+    c.setStrokeColor(blue)
+    c.rect(15*mm, 217*mm, 105*mm, 24*mm)
+    c.setFont("Helvetica", 6)
+    c.setFillColor(blue)
+    c.drawString(16*mm, 241*mm, "→ Raison Sociale")
+    c.drawString(16*mm, 232*mm, "→ Adresse")
+    c.drawString(16*mm, 227*mm, "→ RC")
+    c.drawString(16*mm, 222*mm, "→ NIS")
+    
+    # Cadre paiement
+    c.setStrokeColor(blue)
+    c.rect(125*mm, 223*mm, 85*mm, 18*mm)
+    c.setFont("Helvetica", 6)
+    c.drawString(126*mm, 233*mm, "→ Règlement")
+    c.drawString(126*mm, 228*mm, "→ Banque")
+    
+    # Table produits
+    c.setStrokeColor(red)
+    c.setLineWidth(0.8)
+    for x_col in [16, 25, 119, 138, 163, 195]:
+        c.line(x_col*mm, 192*mm, x_col*mm, 202*mm)
+    
+    c.setFont("Helvetica-Bold", 7)
+    c.setFillColor(red)
+    c.drawString(16*mm, 203*mm, "CODE")
+    c.drawString(25*mm, 203*mm, "DESIGNATION")
+    c.drawString(119*mm, 203*mm, "UM")
+    c.drawString(138*mm, 203*mm, "QTE")
+    c.drawString(163*mm, 203*mm, "PU")
+    c.drawString(195*mm, 203*mm, "MONT")
+    
+    # Totaux
+    c.setStrokeColor(red)
+    c.rect(145*mm, 167*mm, 65*mm, 18*mm)
+    c.setFont("Helvetica", 7)
+    c.setFillColor(red)
+    c.drawString(148*mm, 179*mm, "TOTAL HT")
+    c.drawString(148*mm, 173*mm, "TVA")
+    c.drawString(148*mm, 167*mm, "TOTAL TTC")
+    
+    # Transport
+    draw_marker(50*mm, 155*mm, "Chauffeur", blue, 6)
+    draw_marker(50*mm, 149*mm, "Matricule", blue, 6)
+    
+    # Signature
+    draw_marker(16*mm, 134*mm, "SIGNATURE", red, 7)
+    
+    # Légende
+    c.setFont("Helvetica-Bold", 8)
+    c.setFillColor(black)
+    c.drawString(10*mm, 20*mm, "LÉGENDE :")
+    c.setFont("Helvetica", 7)
+    c.setFillColor(red)
+    c.drawString(10*mm, 16*mm, "● ROUGE : Zones critiques (±0.5mm)")
+    c.setFillColor(blue)
+    c.drawString(10*mm, 12*mm, "● BLEU : Informations client")
+    c.setFillColor(green)
+    c.drawString(10*mm, 8*mm, "● VERT : Zones flexibles")
+    
+    c.setFont("Helvetica-Bold", 9)
+    c.setFillColor(black)
+    c.drawString(90*mm, 20*mm, "INSTRUCTIONS :")
+    c.setFont("Helvetica", 7)
+    c.drawString(90*mm, 16*mm, "1. Imprimer sur papier A4 vierge")
+    c.drawString(90*mm, 12*mm, "2. Superposer avec préimprimé GICA")
+    c.drawString(90*mm, 8*mm, "3. Vérifier alignement marqueurs")
+    c.drawString(90*mm, 4*mm, "4. Noter décalages (offsets)")
+    
+    c.save()
+    return output_path

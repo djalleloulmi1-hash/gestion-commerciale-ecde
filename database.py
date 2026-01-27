@@ -1051,7 +1051,9 @@ class DatabaseManager:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT f.*, c.raison_sociale, c.adresse, c.rc, c.nis, c.nif, 
+            SELECT f.*, 
+                   c.raison_sociale, c.adresse, c.rc, c.nis, c.nif, c.article_imposition,
+                   c.code_client, c.categorie,
                    co.code as contract_code, co.date_debut as contract_debut, co.date_fin as contract_fin
             FROM factures f
             JOIN clients c ON f.client_id = c.id
@@ -1066,7 +1068,7 @@ class DatabaseManager:
         
         # Get line items
         cursor.execute("""
-            SELECT l.*, p.nom as product_nom, p.unite
+            SELECT l.*, p.nom as product_nom, p.unite, p.code_produit
             FROM lignes_facture l
             JOIN products p ON l.product_id = p.id
             WHERE l.facture_id = ?

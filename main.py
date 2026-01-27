@@ -180,12 +180,11 @@ def main():
     try:
         while True:
             # Show login window
-            # [TEST MODE] Bypass Login
-            # login = LoginWindow()
-            # user = login.run()
+            login = LoginWindow()
+            user = login.run()
             
             # Simulated Admin User
-            user = {'id': 1, 'username': 'admin', 'role': 'admin', 'full_name': 'Administrateur'}
+            # user = {'id': 1, 'username': 'admin', 'role': 'admin', 'full_name': 'Administrateur'}
             
             if not user:
                 print("Connexion annulée")

@@ -1703,7 +1703,139 @@ def generate_pareto_word(data: Dict[str, Any], start_date: str, end_date: str):
     
     return filename
 
+def generate_etat_104_word(data: list, start_date: str, end_date: str):
+    """
+    Générer document Word pour État 104 (Ventes par client).
+    
+    Format miroir du PDF:
+    - En-tête avec logo GICA
+    - Titre : "ETAT 104 DE L'ANNÉE : [année]"
+    - Tableau avec totaux
+    """
+    from datetime import datetime
+    from docx.enum.table import WD_ALIGN_VERTICAL
+    from docx.shared import Pt, RGBColor, Inches
+    
+    if Document is None:
+        raise ImportError("python-docx non installé")
+    
+    doc = create_base_document(landscape=True)
+    
+    # En-tête avec logo et titre
+    year = datetime.strptime(start_date, "%Y-%m-%d").year
+    add_header(doc, f"ÉTAT 104 DE L'ANNÉE : {year}", 
+               subtitle=f"Période : {start_date} au {end_date}", 
+               landscape=True)
+    
+    # Tableau de données
+    table = doc.add_table(rows=1, cols=8)
+    table.style = 'Light Grid Accent 1'
+    style_table(table)
+    
+    # En-têtes
+    headers = table.rows[0].cells
+    header_texts = [
+        "N° d'ordre",
+        "Raison Sociale / Nom du Client",
+        "Adresse précise",
+        "NIF (15 chiffres)",
+        "Article d'imposition (A)",
+        "Montant des ventes (HT)",
+        "Montant de la TVA",
+        "Montant TTC"
+    ]
+    
+    for i, text in enumerate(header_texts):
+        headers[i].text = text
+        headers[i].paragraphs[0].runs[0].bold = True
+        headers[i].paragraphs[0].runs[0].font.color.rgb = RGBColor(255, 255, 255)
+        headers[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        set_cell_background(headers[i], '1a237e')
+    
+    # Données et calcul totaux
+    total_ht = 0.0
+    total_tva = 0.0
+    total_ttc = 0.0
+    
+    for row_data in data:
+        row_cells = table.add_row().cells
+        row_cells[0].text = str(row_data['numero'])
+        row_cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        row_cells[1].text = row_data['raison_sociale']
+        
+        row_cells[2].text = row_data['adresse']
+        
+        row_cells[3].text = row_data['nif']
+        row_cells[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        row_cells[4].text = row_data['article_imposition']
+        row_cells[4].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        row_cells[5].text = format_currency(row_data['total_ht'])
+        row_cells[5].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
+        row_cells[6].text = format_currency(row_data['total_tva'])
+        row_cells[6].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
+        row_cells[7].text = format_currency(row_data['total_ttc'])
+        row_cells[7].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
+        total_ht += row_data['total_ht']
+        total_tva += row_data['total_tva']
+        total_ttc += row_data['total_ttc']
+    
+    # Ligne de total
+    total_row = table.add_row().cells
+    total_row[0].text = ""
+    total_row[1].text = ""
+    total_row[2].text = ""
+    total_row[3].text = ""
+    total_row[4].text = "TOTAL"
+    total_row[4].paragraphs[0].runs[0].bold = True
+    total_row[4].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    
+    total_row[5].text = format_currency(total_ht)
+    total_row[5].paragraphs[0].runs[0].bold = True
+    total_row[5].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    
+    total_row[6].text = format_currency(total_tva)
+    total_row[6].paragraphs[0].runs[0].bold = True
+    total_row[6].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    
+    total_row[7].text = format_currency(total_ttc)
+    total_row[7].paragraphs[0].runs[0].bold = True
+    total_row[7].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    
+    # Mettre en surbrillance la ligne de total
+    for cell in total_row:
+        set_cell_background(cell, 'e3f2fd')
+    
+    # Répéter l'en-tête si multi-pages
+    set_repeat_table_header(table.rows[0])
+    
+    # Ajuster largeurs des colonnes
+    table.columns[0].width = Inches(0.6)   # N°
+    table.columns[1].width = Inches(2.5)   # Raison Sociale
+    table.columns[2].width = Inches(2.2)   # Adresse
+    table.columns[3].width = Inches(1.2)   # NIF
+    table.columns[4].width = Inches(1.0)   # Article
+    table.columns[5].width = Inches(1.3)   # HT
+    table.columns[6].width = Inches(1.3)   # TVA
+    table.columns[7].width = Inches(1.3)   # TTC
+    
+    # Sauvegarder
+    export_dir = ensure_export_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = os.path.join(export_dir, f"Etat_104_{year}_{timestamp}.docx")
+    doc.save(filename)
+    
+    print(f"✅ Word État 104 généré : {filename}")
+    return filename
+
+
 def generate_cockpit_word(data: Dict[str, Any]):
+
     """
     Generate Master Dashboard (Cockpit) Word Document.
     """
@@ -1884,5 +2016,228 @@ def generate_cockpit_word(data: Dict[str, Any]):
         
     directory = ensure_export_dir()
     filename = os.path.join(directory, f"Cockpit_Word_{timestamp}.docx")
+    doc.save(filename)
+    return filename
+
+
+def generate_invoice_word(invoice_data):
+    """
+    Générer Facture au format Word (OVERLAY MODE - Données Uniquement)
+    Pour impression sur papier pré-imprimé.
+    """
+    from docx.shared import Cm, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_ALIGN_VERTICAL
+    from utils import nombre_en_lettres
+    
+    if Document is None:
+        return None
+        
+    doc = create_base_document(landscape=True)
+    
+    # --- HEADER SECTION (Top Right Data) ---
+    # We need to position "N° Facture" and "Date" at specific coordinates.
+    # Using a borderless table is the safest way in standard Word flow.
+    
+    # Grid: [Empty Space Left] [Invoice Info Right]
+    # Approx 20cm empty, then Info
+    
+    header_table = doc.add_table(rows=1, cols=2)
+    header_table.autofit = False
+    header_table.columns[0].width = Cm(20) # Spacer to push right
+    header_table.columns[1].width = Cm(7)  # Info area
+    
+    cell_info = header_table.cell(0, 1)
+    p = cell_info.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.LEFT # Align left within the right box
+    
+    # Add vertical spacing to push down to the pre-printed box line?
+    # "tu doit imprimer ou générer uniquement les informations... a l'endroit exact"
+    # Assuming standard header height from margin is sufficient, or adding Breaks.
+    # Let's add simple data.
+    
+    # Invoice Number
+    run = p.add_run(f"\n\n{invoice_data['numero']}\n") # Extra newlines for vertical alignment
+    run.font.name = 'Cambria'
+    run.font.size = Pt(12)
+    run.font.bold = True
+    
+    # Facture Num (Official)
+    run = p.add_run(f"\n{invoice_data.get('numero_facture', invoice_data['numero'])}\n")
+    run.font.name = 'Cambria'
+    run.font.size = Pt(14)
+    run.font.bold = True
+    
+    # Date
+    if invoice_data.get('date_facture'):
+        try:
+             dt = datetime.strptime(invoice_data['date_facture'], '%Y-%m-%d')
+             date_str = dt.strftime('%d/%m/%Y')
+        except:
+             date_str = invoice_data['date_facture']
+    else:
+        date_str = ""
+    
+    run = p.add_run(f"\n{date_str}")
+    run.font.name = 'Cambria'
+    run.font.size = Pt(12)
+    
+    doc.add_paragraph() # Spacer
+    
+    # --- CLIENT & PAYMENT INFO (Middle Section) ---
+    # Two Columns.
+    # Left: Client Data (No labels like "Client:", just the value "SARL FOO")
+    # Right: Payment Data
+    
+    info_table = doc.add_table(rows=1, cols=2)
+    info_table.autofit = False
+    info_table.columns[0].width = Cm(14)
+    info_table.columns[1].width = Cm(13)
+    
+    # Left Cell: Client
+    c1 = info_table.cell(0, 0)
+    p = c1.paragraphs[0]
+    # Add spacing to align with pre-printed lines
+    
+    def add_val(paragraph, value, space_before=0):
+        if space_before:
+            paragraph.add_run("\n" * space_before)
+        r = paragraph.add_run(f"   {value}\n") # Indent slightly
+        r.font.name = 'Cambria'
+        r.font.size = Pt(11)
+        r.bold = True
+        
+    # Vertical spacing matching the Lines in the photo approx
+    # Line 1: Raison Sociale
+    add_val(p, invoice_data['raison_sociale']) 
+    
+    # Line 2: Adresse
+    add_val(p, invoice_data['adresse'])
+    
+    # Line 3: RC / NIS / NIF / ART (Often on same line or 2 lines)
+    # Combining them linearly
+    combined_ids = f"{invoice_data['rc']}                  {invoice_data['nis']}                  {invoice_data['nif']}                  {invoice_data.get('article_imposition', '')}"
+    add_val(p, combined_ids)
+    
+    # Right Cell: Payment (Mode, Banque...)
+    c2 = info_table.cell(0, 1)
+    p = c2.paragraphs[0]
+    
+    # Skip lines to align with "Mode de règlement" usually lower down
+    p.add_run("\n\n") 
+    add_val(p, "Virement") # Mode
+    add_val(p, "BNA OUED SMAR") # Banque
+    add_val(p, "001 00634 0300 000 519 61") # Compte
+    
+    doc.add_paragraph()
+    
+    # --- PRODUCT TABLE (Data Only) ---
+    # 5 Cols. No Headers. Widths must match exactly.
+    widths = [Cm(11), Cm(2), Cm(3), Cm(4), Cm(5)]
+    
+    prod_table = doc.add_table(rows=1, cols=5)
+    prod_table.autofit = False
+    
+    # No Header Row created or populated. Directly data.
+    
+    for ligne in invoice_data['lignes']:
+        row = prod_table.add_row()
+        cells = row.cells
+        
+        # Set Widths
+        for i, w in enumerate(widths):
+            cells[i].width = w
+            
+        cells[0].text = ligne['product_nom']
+        cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
+        
+        cells[1].text = ligne['unite']
+        cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # Format numbers with spaces
+        cells[2].text = f"{ligne['quantite']:,.3f}".replace(",", " ").replace(".", ",")
+        cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        pu = ligne.get('prix_unitaire', 0.0)
+        cells[3].text = format_currency(pu)
+        cells[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
+        cells[4].text = format_currency(ligne['montant'])
+        cells[4].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
+        # Styling
+        for cell in cells:
+            p = cell.paragraphs[0]
+            if p.runs:
+                run = p.runs[0]
+            else:
+                run = p.add_run(cell.text)
+            run.font.name = 'Cambria'
+            run.font.size = Pt(11)
+            run.bold = True
+            
+        # Optional Remise line handled as separate row or text?
+        if hasattr(ligne, 'get') and ligne.get('taux_remise', 0) > 0:
+             p_rem = cells[0].add_paragraph(f"Remise {ligne['taux_remise']:.0f}%")
+             p_rem.alignment = WD_ALIGN_PARAGRAPH.CENTER
+             p_rem.runs[0].font.name = 'Cambria'
+             p_rem.runs[0].font.size = Pt(10)
+
+    # --- TOTALS SECTION ---
+    # Need to align Bottom-Right
+    doc.add_paragraph()
+    doc.add_paragraph() # Spacer for table bottom
+    
+    footer_table = doc.add_table(rows=1, cols=2)
+    footer_table.autofit = False
+    footer_table.columns[0].width = Cm(18)
+    footer_table.columns[1].width = Cm(9)
+    
+    # Left: Driver Info and Signature First, then Amount in Words Below
+    left_cell = footer_table.cell(0, 0)
+    p = left_cell.paragraphs[0]
+    
+    # Driver Info (Values Only) - MOVED TO TOP
+    if invoice_data.get('chauffeur'):
+        p.add_run(f"   {invoice_data['chauffeur']}\n").font.name = 'Cambria'
+    if invoice_data.get('matricule'):
+        p.add_run(f"   {invoice_data['matricule']}\n").font.name = 'Cambria'
+        
+    # Signer Name - MOVED BEFORE AMOUNT  
+    p.add_run("\n\n   HAMMICHE MAKHLOUF\n\n")
+    
+    # Amount in Words (No "Arrêtée..." text) - MOVED TO BOTTOM
+    montant_ttc = invoice_data['montant_ttc']
+    run = p.add_run(f"\n{nombre_en_lettres(montant_ttc)}\n")
+    run.bold = True
+    run.italic = True
+    run.font.name = 'Cambria'
+    run.font.size = Pt(12) 
+    
+    # Right: Totals Box (Values Only)
+    right_cell = footer_table.cell(0, 1)
+    
+    # Nested table for alignment
+    t_totals = right_cell.add_table(rows=3, cols=1)
+    # Height spacing is critical here.
+    
+    def add_total(idx, val, bold=False):
+        c = t_totals.rows[idx].cells[0]
+        p = c.paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        r = p.add_run(format_currency(val))
+        r.font.name = 'Cambria'
+        r.font.size = Pt(12)
+        r.bold = bold
+        
+    add_total(0, invoice_data['montant_ht'])
+    add_total(1, invoice_data['montant_tva'])
+    add_total(2, invoice_data['montant_ttc'], bold=True)
+    
+    directory = ensure_export_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    clean_name = "".join([c for c in invoice_data['raison_sociale'] if c.isalnum() or c in (' ', '_')]).strip()
+    filename = os.path.join(directory, f"Facture_Overlay_{invoice_data['numero']}_{clean_name}_{timestamp}.docx")
+    
     doc.save(filename)
     return filename
