@@ -1,29 +1,49 @@
 
 import sys
-import os
+import traceback
 
-# Add project root to path
-sys.path.append("C:\\GICA_PROJET")
+print("Checking imports...")
 
-print("Attempting to import ui...")
 try:
-    import ui
-    print("SUCCESS: ui imported successfully.")
-except ImportError as e:
-    print(f"FAILURE: ImportError: {e}")
-except Exception as e:
-    print(f"FAILURE: Exception during import: {e}")
-
-print("Attempting to import utils...")
-try:
-    import utils
-    print("SUCCESS: utils imported successfully.")
-except Exception as e:
-    print(f"FAILURE: utils import error: {e}")
-
-print("Attempting to import main...")
-try:
+    print("Importing main...")
     import main
-    print("SUCCESS: main imported successfully.")
-except Exception as e:
-    print(f"FAILURE: main import error: {e}")
+except Exception:
+    traceback.print_exc()
+
+try:
+    print("Importing utils...")
+    import utils
+except Exception:
+    traceback.print_exc()
+    
+try:
+    print("Importing reports...")
+    import reports
+except Exception:
+    traceback.print_exc()
+
+try:
+    print("Importing word_exports...")
+    import word_exports
+except Exception:
+    traceback.print_exc()
+
+try:
+    print("Importing ui...")
+    import ui
+except Exception:
+    traceback.print_exc()
+    
+try:
+    print("Importing database...")
+    import database
+except Exception:
+    traceback.print_exc()
+
+try:
+    print("Importing logic...")
+    import logic
+except Exception:
+    traceback.print_exc()
+    
+print("Check complete.")

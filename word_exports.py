@@ -4,7 +4,10 @@ Handles generation of .docx reports mirroring existing PDF layouts.
 """
 
 import os
+from typing import Dict, Any, List
+
 import shutil
+
 from datetime import datetime
 try:
     from docx import Document

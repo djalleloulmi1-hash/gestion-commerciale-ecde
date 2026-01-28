@@ -7,7 +7,7 @@ import os
 import sys
 import shutil
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter, A4, landscape

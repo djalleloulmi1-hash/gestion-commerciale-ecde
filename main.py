@@ -129,7 +129,7 @@ def main():
     from tkinter import filedialog
     
     config_path = "config.ini"
-    default_db_path = r"C:\GICA_PROJET\gestion_commerciale.db"
+    default_db_path = "gestion_commerciale.db"
     
     # Resolve expected path
     target_path = default_db_path
