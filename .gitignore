@@ -16,7 +16,7 @@ build/
 # Base de données (ne pas versionner la DB de prod !)
 *.db
 *.sqlite3
-Backups/
+# Backups/
 .snapshots/
 
 # Logs
