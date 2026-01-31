@@ -1711,6 +1711,13 @@ class BusinessLogic:
         
         return (True, "Bordereau créé avec succès", bordereau_id)
 
+    def create_payment_with_allocations(self, payment_data: Dict[str, Any], allocations: List[Dict[str, Any]], user_id: int) -> Tuple[bool, str]:
+        """
+        Wrapper for transactional payment creation.
+        """
+        success, msg, pid = self.db.create_payment_with_allocations_transaction(payment_data, allocations, user_id)
+        return success, msg
+
     # ==================== COCKPIT DECISIONNEL ====================
 
     def get_cockpit_data(self) -> Dict[str, Any]:
@@ -2786,6 +2793,47 @@ class BusinessLogic:
                     # Condition: Not Comptant AND Not Sur Avance
                     else:
                          m['libelle'] += " (à terme)"
+
+                    # 4. Check Payment Allocations (Waterfall Logic)
+                    # Fetch payments linked to this invoice via allocations
+                    cursor.execute("""
+                        SELECT p.numero, pa.montant_alloue, p.reference, p.banque
+                        FROM paiement_allocations pa
+                        JOIN paiements p ON pa.paiement_id = p.id
+                        WHERE pa.facture_id = ?
+                    """, (row['id'],))
+                    allocs = cursor.fetchall()
+                    
+                    if allocs:
+                        pay_nums = []
+                        for a in allocs:
+                             # a[0]=numero, a[1]=montant, a[2]=reference, a[3]=banque
+                             ref_text = str(a[0])
+                             extras = []
+                             if a[2]: extras.append(f"Réf: {a[2]}")
+                             if a[3]: extras.append(str(a[3]))
+                             
+                             if extras:
+                                 ref_text += f" ({' - '.join(extras)})"
+                             
+                             pay_nums.append(ref_text)
+
+                        total_alloc = sum(a[1] for a in allocs)
+                        
+                        # Use current etat_paiement or calc remainder
+                        reste = amount - total_alloc
+                        
+                        # Format list of receipts
+                        recus_str = ", ".join(pay_nums)
+                        
+                        # Logic: Soldée vs Partielle
+                        # Tolerance for float equality
+                        if reste < 0.05: 
+                             m['libelle'] += f" - Soldée par reçu N° {recus_str}"
+                        else:
+                             # Format currency manually or import
+                             reste_fmt = f"{reste:,.2f}".replace(",", " ").replace(".", ",")
+                             m['libelle'] += f" - Acompte reçu N° {recus_str} - Reste à payer : {reste_fmt} DA"
                 
                 m['solde_progressif'] = current_balance
                 processed_moves.append(m)

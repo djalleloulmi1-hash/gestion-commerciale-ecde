@@ -20,6 +20,12 @@ except ImportError:
     print("python-docx not installed.")
     Document = None
 
+try:
+    from docx2pdf import convert
+except ImportError:
+    convert = None
+
+
 # ==================== HELPERS ====================
 
 def check_logo_exists():
@@ -1225,8 +1231,12 @@ def generate_grand_livre_word(data, period):
             hr.cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
             set_cell_background(hr.cells[i], "D3D3D3")
             
-        # Widths
-        widths = [Cm(2.5), Cm(2.5), Cm(10.0), Cm(3.0), Cm(3.0), Cm(3.0)]
+        # Widths (Adjusted to prevent overflow on A4 Landscape ~27.7cm printable)
+        # Old: [2.5, 2.5, 10.0, 3.0, 3.0, 3.0] = 24.0 (but seemed to overflow?)
+        # New Proposal: Reduce Libellé, ensure others are minimal.
+        # Date(2.2), Ref(2.2), Lib(8.5), Deb(3.0), Cred(3.0), Solde(3.0) = 21.9 cm
+        # This gives ~6cm buffer for margins and binding.
+        widths = [Cm(2.2), Cm(2.2), Cm(8.5), Cm(3.0), Cm(3.0), Cm(3.0)]
         for i, w in enumerate(widths):
             table.columns[i].width = w
             
@@ -2244,3 +2254,318 @@ def generate_invoice_word(invoice_data):
     
     doc.save(filename)
     return filename
+
+# ==================== RELANCE MODULE ====================
+
+def convert_docx_to_pdf(docx_path):
+    """Convert DOCX to PDF using docx2pdf (Requires Word installed)"""
+    if convert is None:
+        print("docx2pdf library not installed. PDF conversion skipped.")
+        return None
+    
+    try:
+        pdf_path = docx_path.replace(".docx", ".pdf")
+        convert(docx_path, pdf_path)
+        return pdf_path
+    except Exception as e:
+        print(f"PDF Conversion Failed: {e}")
+        return None
+
+def generate_relance_word(data):
+    """
+    Génère une lettre de relance (Mise en demeure / Situation) en Word.
+    Data expected:
+    - client: {raison_sociale, adresse, convention_n (opt), date_effet (opt), date_fin (opt)}
+    - period: {start, end}
+    - balance: {total_dette}
+    - invoices: [{numero, date, montant_ttc}, ...] (Only selected ones)
+    """
+    doc = create_base_document(landscape=False)
+    
+    # 1. EN-TÊTE INSTITUTIONNEL (Dans le Header de la section pour répétition)
+    section = doc.sections[0]
+    header = section.header
+    
+    # Widths: Logo Left (2.5cm), Text Center (11cm), Empty Right (2.5cm) -> Total ~16cm
+    # Adjusted for standard A4 margins (21 - 2 = 19cm printable width)
+    # We can use wider columns in the header
+    header_table = header.add_table(rows=1, cols=3, width=Cm(19))
+    header_table.autofit = False
+    
+    # Widths: Logo Left (2.5cm), Text Center (11cm), Empty Right (2.5cm) -> Total ~16cm
+    # Adjusted for standard A4 margins (21 - 2 = 19cm printable width)
+    # We can use wider columns in the header
+    header_table.columns[0].width = Cm(3.0)
+    header_table.columns[1].width = Cm(13.0)
+    header_table.columns[2].width = Cm(3.0)
+    
+    # Logo in Cell 0
+    logo_path = check_logo_exists()
+    cell_logo = header_table.cell(0, 0)
+    if logo_path:
+        p = cell_logo.paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        run = p.add_run()
+        run.add_picture(logo_path, width=Cm(2.5), height=Cm(1.5)) # Adjusted size
+        
+    # Text Central in Cell 1
+    cell_text = header_table.cell(0, 1)
+    cell_text.vertical_alignment = 1 # Center vertically
+
+    p = cell_text.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    # Ligne 1
+    r1 = p.add_run("GROUPE INDUSTRIEL DES CIMENTS D'ALGERIE\n")
+    r1.font.name = 'Calibri'
+    r1.font.size = Pt(16)
+    r1.bold = True
+    
+    # Ligne 2
+    r2 = p.add_run("ENTREPRISE DES CIMENTS ET DERIVES D'ECH-CHELIFF\n")
+    r2.font.name = 'Calibri'
+    r2.font.size = Pt(14)
+    r2.bold = True
+    
+    # Ligne 3
+    r3 = p.add_run("DEPOT DE VENTE DE OUED SMAR")
+    r3.font.name = 'Calibri'
+    r3.font.size = Pt(12)
+    r3.bold = False # Normal
+    
+    # Bordure de séparation (Use a paragraph with bottom border or underlining spacer)
+    p_border = doc.add_paragraph()
+    p_border_fmt = p_border.paragraph_format
+    p_border.add_run("_" * 75).bold = True # Simple visual separator
+    p_border.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_border_fmt.space_after = Pt(12)
+
+    # PAGINATION (Footer)
+    footer = section.footer
+    p_foot = footer.paragraphs[0]
+    p_foot.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    # "Page "
+    p_foot.add_run("Page ")
+    
+    # Page field
+    run_page = p_foot.add_run()
+    fldChar1 = OxmlElement('w:fldChar')
+    fldChar1.set(qn('w:fldCharType'), 'begin')
+    run_page._r.append(fldChar1)
+    
+    run_instr = p_foot.add_run()
+    instrText = OxmlElement('w:instrText')
+    instrText.set(qn('xml:space'), 'preserve')
+    instrText.text = "PAGE"
+    run_instr._r.append(instrText)
+    
+    run_end = p_foot.add_run()
+    fldChar2 = OxmlElement('w:fldChar')
+    fldChar2.set(qn('w:fldCharType'), 'end')
+    run_end._r.append(fldChar2)
+    
+    # " / "
+    p_foot.add_run(" / ")
+    
+    # NumPages field
+    run_numpages = p_foot.add_run()
+    fldChar3 = OxmlElement('w:fldChar')
+    fldChar3.set(qn('w:fldCharType'), 'begin')
+    run_numpages._r.append(fldChar3)
+    
+    run_instr2 = p_foot.add_run()
+    instrText2 = OxmlElement('w:instrText')
+    instrText2.set(qn('xml:space'), 'preserve')
+    instrText2.text = "NUMPAGES"
+    run_instr2._r.append(instrText2)
+    
+    run_end2 = p_foot.add_run()
+    fldChar4 = OxmlElement('w:fldChar')
+    fldChar4.set(qn('w:fldCharType'), 'end')
+    run_end2._r.append(fldChar4)
+
+    # 2. BLOC DESTINATAIRE & OBJET
+    
+    # Destinataire (Aligné à droite)
+    p_dest = doc.add_paragraph()
+    p_dest.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    
+    r_client = p_dest.add_run(f"{data['client']['raison_sociale']}\n")
+    r_client.bold = True
+    r_client.font.size = Pt(12)
+    
+    r_addr = p_dest.add_run(f"{data['client']['adresse']}")
+    r_addr.font.size = Pt(11)
+    
+    doc.add_paragraph() # Spacer
+    
+    # Date
+    p_date = doc.add_paragraph()
+    # Format date: fait à Oued Smar, le ...
+    current_date = datetime.now().strftime("%d/%m/%Y")
+    p_date.add_run(f"Fait à Oued Smar, le {current_date}")
+    p_date.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    
+    doc.add_paragraph() # Spacer
+    
+    # Objet
+    p_obj = doc.add_paragraph()
+    r_obj = p_obj.add_run(f"Objet : Situation de compte - Période du {data['period']['start']} au {data['period']['end']}")
+    r_obj.bold = True
+    r_obj.underline = True
+    
+    doc.add_paragraph()
+    
+    # 3. CORPS DE LA LETTRE
+    
+    # Intro
+    p_intro = doc.add_paragraph()
+    p_intro.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    intro_text = (
+        f"À l’attention de la Direction de {data['client']['raison_sociale']}, nous portons à votre connaissance "
+        f"que l’examen de votre compte client, pour la période citée en objet, fait apparaître un solde débiteur de "
+        f"{format_currency(data['balance']['total_dette'])} DA en notre faveur."
+    )
+    p_intro.add_run(intro_text)
+    
+    doc.add_paragraph()
+    
+    # Logique Contractuelle
+    p_logic = doc.add_paragraph()
+    p_logic.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    
+    has_convention = data['client'].get('convention_n') and str(data['client']['convention_n']).strip() != ""
+    
+    if has_convention:
+        date_effet = data['client'].get('date_effet') or "N/A"
+        date_fin = data['client'].get('date_fin') or "N/A"
+        txt = (
+            f"Cette situation est relative à l'exécution de la Convention n°{data['client']['convention_n']} "
+            f"signée le {date_effet} et prenant fin le {date_fin}."
+        )
+    else:
+        txt = "Ce solde correspond aux factures de livraisons listées dans le tableau ci-dessous."
+        
+    p_logic.add_run(txt)
+    
+    doc.add_paragraph()
+    
+    # 4. TABLEAU DYNAMIQUE
+    if data.get('invoices'):
+        # Table: N° Facture | Date | Montant TTC
+        table = doc.add_table(rows=1, cols=3)
+        style_table(table)
+        table.autofit = False
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        
+        # Headers
+        headers = ["N° Facture", "Date d'émission", "Montant TTC (DA)"]
+        widths = [Cm(5), Cm(5), Cm(6)]
+        
+        row0 = table.rows[0]
+        set_repeat_table_header(row0)
+        for i, h in enumerate(headers):
+            cell = row0.cells[i]
+            cell.text = h
+            cell.paragraphs[0].runs[0].bold = True
+            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            set_cell_background(cell, "E0E0E0")
+            table.columns[i].width = widths[i]
+            
+        # Rows
+        for inv in data['invoices']:
+            tr = table.add_row()
+            tr.cells[0].text = str(inv['numero'])
+            
+            # Format date
+            try:
+                date_obj = datetime.strptime(inv['date'], '%Y-%m-%d')
+                date_str = date_obj.strftime('%d/%m/%Y')
+            except:
+                date_str = str(inv['date'])
+                
+            tr.cells[1].text = date_str
+            tr.cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            tr.cells[2].text = format_currency(inv['montant_ttc']) + " DA"
+            tr.cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            
+        # Total Row
+        tr_total = table.add_row()
+        c_mer = tr_total.cells[0].merge(tr_total.cells[1])
+        c_mer.text = "TOTAL DES CRÉANCES À RÉGULARISER"
+        c_mer.paragraphs[0].runs[0].bold = True
+        c_mer.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
+        tr_total.cells[2].text = format_currency(data['balance']['total_dette']) + " DA"
+        tr_total.cells[2].paragraphs[0].runs[0].bold = True
+        tr_total.cells[2].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
+        doc.add_paragraph()
+    
+    # Conclusion
+    p_conc = doc.add_paragraph()
+    p_conc.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    conc_text = (
+        "Nous vous invitons à procéder à la régularisation de ce montant global par virement ou chèque bancaire "
+        "dans les plus brefs délais, afin de permettre la mise à jour de votre dossier comptable et d’assurer la "
+        "continuité de nos prestations de service et livraisons. Restant à votre entière disposition, nous vous "
+        "prions d'agréer l’expression de nos salutations distinguées."
+    )
+    p_conc.add_run(conc_text)
+    
+    doc.add_paragraph()
+    doc.add_paragraph() # Spacers
+    
+    # 5. SIGNATAIRES (Pied de page)
+    # Table 1 row 3 cols
+    sig_table = doc.add_table(rows=1, cols=3)
+    sig_table.autofit = False
+    sig_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    
+    # Widths similar
+    for i in range(3):
+        sig_table.columns[i].width = Cm(5.5)
+        
+    row = sig_table.rows[0]
+    
+    # Left
+    c1 = row.cells[0]
+    p1 = c1.paragraphs[0]
+    p1.add_run("P/ LE SERVICE COMPTABILITE").bold = True
+    p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    # Center
+    c2 = row.cells[1]
+    p2 = c2.paragraphs[0]
+    p2.add_run("LE CHEF DU DEPOT").bold = True
+    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    # Right
+    c3 = row.cells[2]
+    p3 = c3.paragraphs[0]
+    p3.add_run("ACCUSE DU CLIENT").bold = True
+    p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    # Add space for signature
+    for c in row.cells:
+        c.add_paragraph()
+        c.add_paragraph()
+        c.add_paragraph()
+        c.add_paragraph()
+        c.add_paragraph()
+        
+    # SAVE
+    directory = ensure_export_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    clean_name = "".join([c for c in data['client']['raison_sociale'] if c.isalnum() or c in (' ', '_')]).strip()
+    filename = os.path.join(directory, f"Relance_{clean_name}_{timestamp}.docx")
+    
+    doc.save(filename)
+    
+    # Attempt PDF conversion
+    convert_docx_to_pdf(filename)
+    
+    return filename
+

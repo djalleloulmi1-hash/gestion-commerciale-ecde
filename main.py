@@ -3,12 +3,30 @@ Main Entry Point - Commercial Management System
 Handles application startup, login, and initialization
 """
 
+
+# [MONKEY-PATCH] Fix for reportlab 'usedforsecurity' error on Python < 3.9
+import hashlib
+try:
+    hashlib.md5(b'test', usedforsecurity=False)
+except TypeError:
+    _original_md5 = hashlib.md5
+    def _md5_wrapper(data=b'', **kwargs):
+        # Ignore 'usedforsecurity' if passed
+        if 'usedforsecurity' in kwargs:
+            del kwargs['usedforsecurity']
+        return _original_md5(data, **kwargs)
+    hashlib.md5 = _md5_wrapper
+
 import tkinter as tk
 from tkinter import messagebox
 from database import get_db
 from ui import MainApplication
 from utils import create_backup
 import sys
+
+
+# Continue imports...
+
 
 
 class LoginWindow:

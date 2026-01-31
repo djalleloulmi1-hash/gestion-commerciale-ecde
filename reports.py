@@ -883,10 +883,13 @@ def generate_annual_receivables_pdf(data, date_n, output_path=None):
     
     # Logo Check
     from utils import check_logo_exists
-    if check_logo_exists():
+    # Logo Check
+    from utils import check_logo_exists
+    logo_path = check_logo_exists()
+    if logo_path:
         try:
             from reportlab.platypus import Image as RLImage
-            im = RLImage("logo_gica.png", width=4*cm, height=2*cm)
+            im = RLImage(logo_path, width=4*cm, height=2*cm)
             im.hAlign = 'LEFT'
             elements.append(im)
         except: pass
@@ -1079,7 +1082,15 @@ def generate_grand_livre_pdf(data, period, output_path=None):
             except: d_str = mv['date']
             
             ref = str(mv['ref'])
-            lib = mv['libelle']
+            # Wrap Libelle in Paragraph for text wrapping
+            lib_style = ParagraphStyle(
+                'LibStyle', 
+                parent=styles['Normal'], 
+                fontSize=9, 
+                leading=11
+            )
+            lib = Paragraph(mv['libelle'], lib_style)
+            
             deb = format_currency_report(mv['debit']) if mv['debit'] != 0 else "-"
             cred = format_currency_report(mv['credit']) if mv['credit'] != 0 else "-"
             solde = format_currency_report(mv['solde_progressif'])
@@ -1195,10 +1206,11 @@ def generate_recovery_pdf(data, month, year, output_path):
     # --- HEADER ---
     # Logo
     from utils import check_logo_exists
-    if check_logo_exists():
+    logo_path = check_logo_exists()
+    if logo_path:
         try:
             from reportlab.platypus import Image as RLImage
-            im = RLImage("logo_gica.png", width=4*cm, height=2*cm)
+            im = RLImage(logo_path, width=4*cm, height=2*cm)
             im.hAlign = 'LEFT'
             elements.append(im)
         except: pass

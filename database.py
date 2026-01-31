@@ -223,6 +223,12 @@ MASTER_SCHEMA = {
         "active": "INTEGER DEFAULT 1",
         "created_by": "INTEGER REFERENCES users(id)",
         "created_at": "TEXT DEFAULT CURRENT_TIMESTAMP"
+    },
+    "paiement_allocations": {
+        "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+        "paiement_id": "INTEGER NOT NULL REFERENCES paiements(id)",
+        "facture_id": "INTEGER NOT NULL REFERENCES factures(id)",
+        "montant_alloue": "REAL NOT NULL"
     }
 }
 
@@ -592,6 +598,51 @@ class DatabaseManager:
                 return True, f"Un client avec la raison sociale '{raison_sociale}' existe déjà (Code: {row[1]})."
                 
         return False, ""
+
+    def get_client_balance(self, client_id: int) -> float:
+        """
+        Calculate client balance: Report (N-1) + Sales - Payments - Avoirs
+        Takes into account the last closure year to avoid double counting if Report is updated.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # 1. Get Report N-1
+        cursor.execute("SELECT report_n_moins_1 FROM clients WHERE id = ?", (client_id,))
+        res = cursor.fetchone()
+        report = res[0] if res and res[0] else 0.0
+        
+        # 2. Determine Start Year (After last closure)
+        cursor.execute("SELECT MAX(annee) FROM clotures")
+        res_clo = cursor.fetchone()
+        last_closed_year = res_clo[0] if res_clo and res_clo[0] else 0
+        
+        # 3. Sum Movements after closure
+        # Payments
+        cursor.execute("""
+            SELECT COALESCE(SUM(montant), 0) FROM paiements 
+            WHERE client_id = ? AND CAST(strftime('%Y', date_paiement) AS INTEGER) > ?
+        """, (client_id, last_closed_year))
+        payments = cursor.fetchone()[0]
+        
+        # Invoices
+        cursor.execute("""
+            SELECT COALESCE(SUM(montant_ttc), 0) FROM factures 
+            WHERE client_id = ? AND type_document = 'Facture' AND statut != 'Annulée' 
+            AND annee > ?
+        """, (client_id, last_closed_year))
+        invoices = cursor.fetchone()[0]
+        
+        # Avoirs
+        cursor.execute("""
+            SELECT COALESCE(SUM(montant_ttc), 0) FROM factures 
+            WHERE client_id = ? AND type_document = 'Avoir' AND statut != 'Annulée'
+            AND annee > ?
+        """, (client_id, last_closed_year))
+        avoirs = cursor.fetchone()[0]
+        
+        # Balance = Report + Payments + Avoirs - Invoices
+        return report + payments + avoirs - invoices
 
     # ==================== CONTRACT OPERATIONS ====================
     
@@ -1025,7 +1076,19 @@ class DatabaseManager:
                    (SELECT COALESCE(SUM(quantite), 0) FROM lignes_facture WHERE facture_id = f.id) as total_quantite,
                    (SELECT p.unite FROM lignes_facture l JOIN products p ON l.product_id = p.id WHERE l.facture_id = f.id LIMIT 1) as unite,
                    (SELECT numero FROM factures WHERE id = f.facture_origine_id) as parent_ref,
-                   (SELECT GROUP_CONCAT(numero, ', ') FROM factures WHERE facture_origine_id = f.id AND type_document = 'Avoir' AND statut != 'Annulée') as child_refs
+                   (SELECT GROUP_CONCAT(numero, ', ') FROM factures WHERE facture_origine_id = f.id AND type_document = 'Avoir' AND statut != 'Annulée') as child_refs,
+                   (SELECT GROUP_CONCAT(p.numero, ', ') 
+                    FROM paiements p 
+                    JOIN paiement_allocations pa ON p.id = pa.paiement_id 
+                    WHERE pa.facture_id = f.id) as payment_refs,
+                   (SELECT GROUP_CONCAT(p.reference, ', ') 
+                    FROM paiements p 
+                    JOIN paiement_allocations pa ON p.id = pa.paiement_id 
+                    WHERE pa.facture_id = f.id) as payment_external_refs,
+                   (SELECT GROUP_CONCAT(p.banque, ', ') 
+                    FROM paiements p 
+                    JOIN paiement_allocations pa ON p.id = pa.paiement_id 
+                    WHERE pa.facture_id = f.id) as payment_banks
             FROM factures f
             JOIN clients c ON f.client_id = c.id
             LEFT JOIN users u ON f.created_by = u.id
@@ -1402,8 +1465,326 @@ class DatabaseManager:
             'bordereau': bordereau,
             'paiements': paiements
         }
+
+    def get_payment_by_id(self, payment_id: int) -> Optional[Dict[str, Any]]:
+        """Get payment by ID"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT p.*, c.raison_sociale as client_nom 
+            FROM paiements p
+            JOIN clients c ON p.client_id = c.id
+            WHERE p.id = ?
+        """, (payment_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def create_payment_allocation(self, paiement_id: int, facture_id: int, montant_alloue: float):
+        """Link a payment to an invoice with a specific amount"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO paiement_allocations (paiement_id, facture_id, montant_alloue)
+            VALUES (?, ?, ?)
+        """, (paiement_id, facture_id, montant_alloue))
+        conn.commit()
+
+    def get_payment_allocations(self, paiement_id: int) -> List[Dict[str, Any]]:
+        """Get all allocations for a specific payment payment"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM paiement_allocations WHERE paiement_id = ?", (paiement_id,))
+        return [dict(row) for row in cursor.fetchall()]
     
-    # ==================== CLOSURE OPERATIONS ====================
+    def get_invoice_allocations(self, facture_id: int) -> List[Dict[str, Any]]:
+        """Get all payment allocations for a specific invoice"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM paiement_allocations WHERE facture_id = ?", (facture_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_invoice_paid_amount(self, facture_id: int) -> float:
+        """Calculate total amount paid for an invoice"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        # Method 1: Sum from allocations (New way)
+        cursor.execute("SELECT SUM(montant_alloue) FROM paiement_allocations WHERE facture_id = ?", (facture_id,))
+        total_alloc = cursor.fetchone()[0] or 0.0
+        
+        # Method 2: Fallback for old payments (direct link)
+        # Only if strict allocation didn't exist before. 
+        # For backward compatibility, check if 'paiements' has facture_id directly
+        cursor.execute("SELECT SUM(montant) FROM paiements WHERE facture_id = ?", (facture_id,))
+        total_direct = cursor.fetchone()[0] or 0.0
+        
+        # Avoid double counting if data migration wasn't done.
+        # Ideally we should migrate all legacy payments to allocations.
+        # For now, just return max (assuming one method used) or sum if distinct?
+        # Safe bet: simple sum if they are distinct records.
+        # But wait, one payment could have both? No.
+        # Let's return total_alloc if > 0 else total_direct
+        if total_alloc > 0.001:
+             return total_alloc
+        return total_direct
+
+    def get_client_unpaid_invoices_list(self, client_id: int) -> List[Dict[str, Any]]:
+        """Get list of unpaid or partially paid invoices for a client"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, numero, date_facture, montant_ttc, statut 
+            FROM factures 
+            WHERE client_id = ? AND statut != 'Soldée' AND statut != 'Annulée'
+            ORDER BY date_facture ASC
+        """, (client_id,))
+        
+        results = []
+        rows = cursor.fetchall()
+        for r in rows:
+            # Check real remaining balance
+            total = r['montant_ttc']
+            paid = self.get_invoice_paid_amount(r['id'])
+            reste = total - paid
+            
+            if reste > 0.01:
+                item = dict(r)
+                item['reste'] = reste
+                item['deja_paye'] = paid
+                results.append(item)
+        return results
+
+    def create_payment_with_allocations_transaction(self, payment_data: Dict[str, Any], allocations: List[Dict[str, Any]], created_by: int) -> Tuple[bool, str, Optional[int]]:
+        """
+        Create a payment and its allocations in a single transaction.
+        Updates 'statut' of invoices if fully paid.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Generate numero
+            cursor.execute("SELECT COUNT(*) FROM paiements")
+            count = cursor.fetchone()[0] + 1
+            numero = f"PAY-{count:06d}"
+
+            # 1. Insert Payment
+            cursor.execute("""
+                INSERT INTO paiements (
+                    numero, client_id, montant, date_paiement, mode_paiement, 
+                    reference, banque, contrat_num, created_by, statut
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'En attente')
+            """, (
+                numero, payment_data['client_id'], payment_data['montant'], payment_data['date_paiement'],
+                payment_data['mode_paiement'], payment_data.get('reference'), payment_data.get('banque'),
+                payment_data.get('contrat_num'), created_by
+            ))
+            payment_id = cursor.lastrowid
+            
+            # 2. Insert Allocations
+            for alloc in allocations:
+                cursor.execute("""
+                    INSERT INTO paiement_allocations (paiement_id, facture_id, montant_alloue)
+                    VALUES (?, ?, ?)
+                """, (payment_id, alloc['facture_id'], alloc['montant']))
+                
+                # 3. Check and Update Invoice Status
+                # We need to calculate total paid for this invoice including this new allocation
+                # Since we are in transaction, we can read what we just wrote? 
+                # SQLite supports reading uncommitted changes within same connection.
+                
+                # Fetch total allocations for this invoice
+                cursor.execute("SELECT SUM(montant_alloue) FROM paiement_allocations WHERE facture_id = ?", (alloc['facture_id'],))
+                total_alloc = cursor.fetchone()[0] or 0.0
+                
+                # Fetch Invoice Total
+                cursor.execute("SELECT montant_ttc, statut FROM factures WHERE id = ?", (alloc['facture_id'],))
+                inv_row = cursor.fetchone()
+                if inv_row:
+                    montant_ttc = inv_row[0]
+                    current_statut = inv_row[1]
+                    
+                    # Update Statut
+                    new_statut = current_statut
+                    remaining = montant_ttc - total_alloc
+                    
+                    if remaining <= 0.05: # Tolerance
+                        new_statut = "Soldée"
+                    else:
+                        new_statut = "Partiellement payée"
+                    
+                    if new_statut != current_statut:
+                        cursor.execute("UPDATE factures SET statut = ? WHERE id = ?", (new_statut, alloc['facture_id']))
+
+            conn.commit()
+            return True, "Paiement enregistré avec succès", payment_id
+            
+        except Exception as e:
+            conn.rollback()
+            return False, f"Erreur Transaction: {str(e)}", None
+        # Ideally, we should migrate old data or choose one source.
+        # For now, if allocations exist, use them. Else use direct.
+        if total_alloc > 0:
+            return total_alloc
+        return total_direct
+        return total_direct
+
+    def process_payment_transaction(self, payment_data: Dict[str, Any], allocations: List[Dict[str, Any]]) -> int:
+        """
+        Execute payment creation, allocation, and invoice status updates in a single atomic transaction.
+        
+        Args:
+            payment_data: Dict containing payment fields (date, client_id, amount, etc.)
+            allocations: List of dicts with {'facture_id': int, 'montant_alloue': float}
+            
+        Returns:
+            int: The ID of the created payment.
+            
+        Raises:
+            Exception: If any error occurs, the transaction is rolled back.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            conn.execute("BEGIN TRANSACTION")
+            
+            # 1. Create Payment Record
+            cursor.execute("""
+                INSERT INTO paiements (
+                    numero, date_paiement, client_id, montant, mode_paiement, 
+                    reference, banque, statut, bordereau_id, contrat_num, 
+                    contrat_date_debut, contrat_date_fin, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                payment_data['numero'], payment_data['date_paiement'], payment_data['client_id'],
+                payment_data['montant'], payment_data['mode_paiement'], payment_data.get('reference'),
+                payment_data.get('banque'), payment_data.get('statut', 'En attente'),
+                payment_data.get('bordereau_id'), payment_data.get('contrat_num'),
+                payment_data.get('contrat_date_debut'), payment_data.get('contrat_date_fin'),
+                payment_data.get('created_by')
+            ))
+            payment_id = cursor.lastrowid
+            
+            # 2. Process Allocations
+            for alloc in allocations:
+                facture_id = alloc['facture_id']
+                montant_alloue = alloc['montant_alloue']
+                
+                # Insert Allocation
+                cursor.execute("""
+                    INSERT INTO paiement_allocations (paiement_id, facture_id, montant_alloue)
+                    VALUES (?, ?, ?)
+                """, (payment_id, facture_id, montant_alloue))
+                
+                # Update Invoice Status
+                # Check total allocated vs total amount
+                # We need to fetch current total allocated for this invoice (including this new one)
+                cursor.execute("""
+                    SELECT SUM(montant_alloue) FROM paiement_allocations WHERE facture_id = ?
+                """, (facture_id,))
+                total_allocated = cursor.fetchone()[0] or 0.0
+                
+                # Get Invoice Total
+                cursor.execute("SELECT montant_ttc FROM factures WHERE id = ?", (facture_id,))
+                res = cursor.fetchone()
+                if res:
+                    montant_ttc = res[0]
+                    
+                    # Logic: If allocated >= TTC (with small tolerance for float precision), mark as Soldée
+                    if total_allocated >= (montant_ttc - 0.01):
+                        new_status = 'Soldée'
+                    else:
+                        new_status = 'Partiellement payée'
+                        
+                    cursor.execute("UPDATE factures SET statut = ? WHERE id = ?", (new_status, facture_id))
+            
+            # 3. Update Client Balance (Solde Créance)
+            # Credit the payment amount to reduce debt
+            cursor.execute("""
+                UPDATE clients 
+                SET solde_creance = solde_creance - ? 
+                WHERE id = ?
+            """, (payment_data['montant'], payment_data['client_id']))
+            
+            # 4. Log Action
+            if payment_data.get('created_by'):
+                 cursor.execute("""
+                    INSERT INTO audit_logs (user_id, action, details)
+                    VALUES (?, ?, ?)
+                """, (payment_data['created_by'], "CREATE_PAYMENT_TRANSACTION", f"Payment {payment_data['numero']} ID {payment_id} : {payment_data['montant']} DA"))
+
+            conn.commit()
+            return payment_id
+            
+        except Exception as e:
+            conn.rollback()
+            raise e
+
+    def delete_payment_transaction(self, payment_id: int, user_id: int = None) -> bool:
+        """
+        Reverse a payment: delete record, delete allocations, revert invoice statuses, revert client balance.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            conn.execute("BEGIN TRANSACTION")
+            
+            # Get Payment Info
+            cursor.execute("SELECT * FROM paiements WHERE id = ?", (payment_id,))
+            payment = cursor.fetchone()
+            if not payment:
+                conn.rollback()
+                return False
+                
+            payment_amount = payment['montant']
+            client_id = payment['client_id']
+            
+            # 1. Get allocations to update invoice statuses later
+            cursor.execute("SELECT facture_id FROM paiement_allocations WHERE paiement_id = ?", (payment_id,))
+            affected_invoices = [row[0] for row in cursor.fetchall()]
+            
+            # 2. Delete Allocations
+            cursor.execute("DELETE FROM paiement_allocations WHERE paiement_id = ?", (payment_id,))
+            
+            # 3. Re-evaluate Invoice Statuses
+            for fact_id in affected_invoices:
+                cursor.execute("SELECT SUM(montant_alloue) FROM paiement_allocations WHERE facture_id = ?", (fact_id,))
+                total_allocated = cursor.fetchone()[0] or 0.0
+                
+                cursor.execute("SELECT montant_ttc FROM factures WHERE id = ?", (fact_id,))
+                fact_res = cursor.fetchone()
+                if fact_res:
+                    montant_ttc = fact_res[0]
+                    
+                    if total_allocated >= (montant_ttc - 0.01):
+                        status = "Soldée"
+                    elif total_allocated > 0.01:
+                        status = "Partiellement payée"
+                    else:
+                        status = "Non soldée"
+                    
+                    cursor.execute("UPDATE factures SET statut = ? WHERE id = ?", (status, fact_id))
+
+            # 4. Delete Payment
+            cursor.execute("DELETE FROM paiements WHERE id = ?", (payment_id,))
+            
+            # 5. Revert Client Balance (Add debt back)
+            cursor.execute("UPDATE clients SET solde_creance = solde_creance + ? WHERE id = ?", (payment_amount, client_id))
+            
+            # 6. Log
+            if user_id:
+                 cursor.execute("""
+                    INSERT INTO audit_logs (user_id, action, details)
+                    VALUES (?, ?, ?)
+                """, (user_id, "DELETE_PAYMENT_TRANSACTION", f"Deleted Payment ID {payment_id}: {payment_amount} DA"))
+            
+            conn.commit()
+            return True
+            
+        except Exception as e:
+            conn.rollback()
+            raise e
     
     def create_cloture(self, annee: int, created_by: int = None) -> int:
         """Create annual closure"""
